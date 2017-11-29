@@ -2,7 +2,7 @@
 import csv
 import random
 
-source_path = "./Data_Entry_2017.csv"
+source_path = "/data/CXR8/Data_Entry_2017.csv"
 dist_path_train = "./Train_Label.csv"
 dist_path_val = "./Val_Label.csv"
 dist_path_test = "./Test_Label.csv"

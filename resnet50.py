@@ -18,7 +18,7 @@ import logging
 
 
 use_gpu = torch.cuda.is_available
-data_dir = "./images"
+data_dir = "/data/CXR8/images"
 save_dir = "./savedModels"
 log_dir = "./log"
 statistic_dir = "./statistic"
