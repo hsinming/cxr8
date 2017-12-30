@@ -1,21 +1,21 @@
-import cv2
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.metrics import roc_auc_score
 from torch.autograd import Variable
-import pandas as pd
-import numpy as np
 import torchvision
 from torchvision import datasets, models, transforms
 from torch.utils.data import Dataset, DataLoader
 import torch.utils.model_zoo as model_zoo
+from sklearn.metrics import roc_auc_score
+import pandas as pd
+import numpy as np
+from PIL import Image
 import time
 import os
 
 
 use_gpu = torch.cuda.is_available
-data_dir = "./images"
+data_dir = "/data/CXR8/images"
 save_dir = "./savedModels"
 label_path = {'train':"./Train_Label.csv", 'val':"./Val_Label.csv", 'test':"Test_Label.csv"}
 
@@ -33,7 +33,7 @@ class CXRDataset(Dataset):
 
     def __getitem__(self, idx):
         img_name = os.path.join(self.root_dir, self.labels_csv.ix[idx, 0])
-        image = cv2.imread(img_name)
+        image = Image.open(img_name).convert('RGB')
         if self.transform:
             image = self.transform(image)
         label = self.labels_csv.ix[idx, 1:].as_matrix().astype('float')
@@ -43,9 +43,9 @@ class CXRDataset(Dataset):
         return sample
 
 def loadData(batch_size):
-    trans = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
+    trans = transforms.Compose([transforms.Resize(224), transforms.ToTensor()])
     image_datasets = {x: CXRDataset(label_path[x], data_dir, transform = trans)for x in ['train', 'val']}
-    dataloders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size, shuffle=False, num_workers=6)
+    dataloders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size, shuffle=False, num_workers=4)
                   for x in ['train', 'val']}
     dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
     print('Training data: {}\nValidation data: {}'.format(dataset_sizes['train'], dataset_sizes['val']))
@@ -54,7 +54,7 @@ def loadData(batch_size):
     return dataloders, dataset_sizes, class_names
 
 def train_model(model, optimizer, num_epochs=25):
-    batch_size = 50
+    batch_size = 40
     since = time.time()
     dataloders, dataset_sizes, class_names = loadData(batch_size)
     best_model_wts = model.state_dict()
@@ -77,10 +77,9 @@ def train_model(model, optimizer, num_epochs=25):
             running_loss = 0.0
             outputList = []
             labelList = []
-            num = 0
             logLoss = 0
             # Iterate over data.
-            for data in dataloders[phase]:
+            for idx, data in enumerate(dataloders[phase]):
                 # get the inputs
                 inputs = data['image']
                 labels = data['label']
@@ -113,7 +112,7 @@ def train_model(model, optimizer, num_epochs=25):
                 # forward
                 outputs = model(inputs)
                 out_data = outputs.data
-                criterion = nn.BCEWithLogitsLoss(weight=weight)
+                criterion = nn.BCELoss(weight=weight)
                 loss = criterion(outputs, labels)
 
                 # backward + optimize only if in training phase
@@ -130,12 +129,11 @@ def train_model(model, optimizer, num_epochs=25):
                     labelList.append(labels[i].tolist())
                 
                 logLoss += loss.data[0]
-                num = num + 1
-                if(num%(5000/batch_size)==0):
-                    try: iterAuc =  roc_auc_score(np.array(labelList[-5000:]),
-                                                  np.array(outputList[-5000:]))
+                if(idx%(2000/batch_size)==0):
+                    try: iterAuc =  roc_auc_score(np.array(labelList[-2000:]),
+                                                  np.array(outputList[-2000:]))
                     except: iterAuc = 0
-                    print('{} {:.2f}% Loss: {:.4f} AUC: {:.4f}'.format(phase, 100*num/len(dataloders[phase]), logLoss/((5000/batch_size)*len(data)), iterAuc))
+                    print('{} {:.2f}% Loss: {:.4f} AUC: {:.4f}'.format(phase, 100*idx/len(dataloders[phase]), logLoss/((2000/batch_size)*len(data)), iterAuc))
                     logLoss = 0
 
 
@@ -192,6 +190,7 @@ class Model(nn.Module):
         )
         self.prediction = nn.Sequential(
             nn.Linear(256, 14),
+            nn.Sigmoid()
         )
     
     def forward(self, x):
@@ -201,31 +200,76 @@ class Model(nn.Module):
         x = x.view(x.size(0), -1)#256
         x = self.prediction(x)#14
         return x
+'''
+class Model(nn.Module):
+    def __init__(self):
+        super(Model, self).__init__()
+        self.model_ft = models.resnet50(pretrained=True)
+        for param in self.model_ft.parameters():
+            param.requires_grad = False
 
+        self.transition = nn.Sequential(
+            nn.Conv2d(2048, 2048, kernel_size=3, padding=1, stride=1, bias=False),
+            #nn.AvgPool2d(kernel_size=2, stride=2),
+        )
+        self.globalPool = nn.Sequential(
+            nn.MaxPool2d(32)
+        )
+        self.prediction = nn.Sequential(
+            nn.Linear(2048, 14),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        x = self.model_ft.conv1(x)
+        x = self.model_ft.bn1(x)
+        x = self.model_ft.relu(x)
+        x = self.model_ft.maxpool(x)
+
+        x = self.model_ft.layer1(x)
+        x = self.model_ft.layer2(x)
+        x = self.model_ft.layer3(x)
+        x = self.model_ft.layer4(x)
+
+
+        x = self.transition(x)
+        x = self.globalPool(x)
+        x = x.view(x.size(0), -1)
+        x = self.prediction(x)#14
+        return x
+'''   
 
 def saveInfo(model):
     #save model
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-    torch.save(model.state_dict(), os.path.join(save_dir, "alexnet.pth"))
+    torch.save(model.state_dict(), os.path.join(save_dir, "vgg_v2.pth"))
 
 
 if __name__ == '__main__':
     try:
-        model = Model()
-        model.load_state_dict(torch.load(os.path.join(save_dir, "alexnet.pth")))
-        print('using previous model')
-    except:
-        model = Model()
+        model = models.vgg16(pretrained=True)
+        model.classifier = nn.Sequential(
+            nn.Linear(512*7*7, 14),
+            nn.Sigmoid()
+        )
+        #model.load_state_dict(torch.load(os.path.join(save_dir, "alexnet.pth")))
+        #print('using previous model')
+    except:pass
+        #model = Model()
+
+    #optimizer = optim.Adam([
+    #        {'params':model.transition.parameters()},
+    #        {'params':model.globalPool.parameters()},
+    #        {'params':model.prediction.parameters()}],
+    #        lr=1e-3)
+
+    optimizer = optim.Adam(model.classifier.parameters(), 3e-4)
 
     if use_gpu:
         model = model.cuda()
+        model = torch.nn.DataParallel(model).cuda()
 
-    optimizer = optim.Adam([
-            {'params':model.transition.parameters()},
-            {'params':model.globalPool.parameters()},
-            {'params':model.prediction.parameters()}],
-            lr=1e-3)
 
     model = train_model(model, optimizer, num_epochs = 10)
     saveInfo(model)    
