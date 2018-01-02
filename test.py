@@ -17,7 +17,7 @@ from PIL import Image
 
 
 use_gpu = torch.cuda.is_available
-data_dir = "./images"
+data_dir = "/data/CXR8/images"
 save_dir = "./savedModels"
 label_path = {'train':"./Train_Label.csv", 'val':"./Val_Label.csv", 'test':"Test_Label.csv"}
 

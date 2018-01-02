@@ -122,6 +122,7 @@ def train_model(model, optimizer, num_epochs=25):
 
                 # statistics
                 running_loss += loss.data[0]
+                #print('running_loss = {}'.format(running_loss))
                 labels = labels.data.cpu().numpy()
                 out_data = out_data.cpu().numpy()
                 for i in range(out_data.shape[0]):
@@ -271,6 +272,6 @@ if __name__ == '__main__':
         model = torch.nn.DataParallel(model).cuda()
 
 
-    model = train_model(model, optimizer, num_epochs = 10)
+    model = train_model(model, optimizer, num_epochs = 50)
     saveInfo(model)    
 

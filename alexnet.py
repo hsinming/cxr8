@@ -15,7 +15,7 @@ import os
 
 
 use_gpu = torch.cuda.is_available
-data_dir = "./images"
+data_dir = "/data/CXR8/images"
 save_dir = "./savedModels"
 label_path = {'train':"./Train_Label.csv", 'val':"./Val_Label.csv", 'test':"Test_Label.csv"}
 
@@ -90,7 +90,7 @@ def train_model(model, optimizer, num_epochs=25):
                 N = 0
                 for label in labels:
                     for v in label:
-                        if int(v) == 1: N += 1
+                        if int(v) == 0: N += 1
                         else: P += 1
                 try:
                     BP = (P + N)/P
@@ -202,6 +202,19 @@ class Model(nn.Module):
         x = self.prediction(x)#14
         return x
 
+def returnCAM(feature_conv, weight_softmax, class_idx):
+    # generate the class activation maps upsample to 256x256
+    size_upsample = (1024, 1024)
+    bz, nc, h, w = feature_conv.shape
+    output_cam = []
+    for idx in class_idx:
+        cam = weight_softmax[idx].dot(feature_conv.reshape((nc, h*w)))
+        cam = cam.reshape(h, w)
+        cam = cam - np.min(cam)
+        cam_img = cam / np.max(cam)
+        cam_img = np.uint8(255 * cam_img)
+        output_cam.append(cv2.resize(cam_img, size_upsample))
+    return output_cam
 
 def saveInfo(model):
     #save model
@@ -227,6 +240,6 @@ if __name__ == '__main__':
             {'params':model.prediction.parameters()}],
             lr=1e-3)
 
-    model = train_model(model, optimizer, num_epochs = 10)
+    model = train_model(model, optimizer, num_epochs = 50)
     saveInfo(model)    
 

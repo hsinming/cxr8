@@ -25,6 +25,20 @@ disease_categories = {
         'Hernia': 13,
         }
 
+# Re-classify the disease into common imaging findings.
+finding_categories = {
+    'Opacity': ['Atelectasis', 'Infiltration', 'Pneumonia', 'Consolidation'],
+    'Cardiomegaly': ['Cardiomegaly'],
+    'Effusion': ['Effusion'],
+    'Tumor': ['Mass', 'Nodule'],
+    'Pneumothorax': ['Pneumothorax'],
+    'Edema': ['Edema'],
+    'Emphysema': ['Emphysema'],
+    'Fibrosis': ['Fibrosis'],
+    'Pleural_Thickening': ['Pleural_Thickening'],
+    'Hernia': ['Hernia']
+}
+
 if __name__ == '__main__':
     with open(source_path) as f:
         with open(dist_path_train, "w+", newline='') as wf_train:

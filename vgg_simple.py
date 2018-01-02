@@ -17,7 +17,7 @@ import os
 use_gpu = torch.cuda.is_available
 data_dir = "/data/CXR8/images"
 save_dir = "./savedModels"
-label_path = {'train':"./Train_Label.csv", 'val':"./Val_Label.csv", 'test':"Test_Label.csv"}
+label_path = {'train':"./Train_Label_simple.csv", 'val':"./Val_Label_simple.csv", 'test':"./Test_Label_simple.csv"}
 
 class CXRDataset(Dataset):
 
@@ -54,7 +54,7 @@ def loadData(batch_size):
     return dataloders, dataset_sizes, class_names
 
 def train_model(model, optimizer, num_epochs=25):
-    batch_size = 3
+    batch_size = 8 
     since = time.time()
     dataloders, dataset_sizes, class_names = loadData(batch_size)
     best_model_wts = model.state_dict()
@@ -90,7 +90,7 @@ def train_model(model, optimizer, num_epochs=25):
                 N = 0
                 for label in labels:
                     for v in label:
-                        if int(v) == 1: N += 1
+                        if int(v) == 0: N += 1
                         else: P += 1
                 try:
                     BP = (P + N)/P
@@ -113,7 +113,7 @@ def train_model(model, optimizer, num_epochs=25):
                 # forward
                 outputs = model(inputs)
                 out_data = outputs.data
-                criterion = nn.BCELoss(weight=weight)
+                criterion = nn.BCEWithLogitsLoss(weight=weight)
                 loss = criterion(outputs, labels)
 
                 # backward + optimize only if in training phase
@@ -139,8 +139,8 @@ def train_model(model, optimizer, num_epochs=25):
                     logLoss = 0
 
 
-            #labelList.append([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
-            #outputList.append([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
+            #labelList.append([1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
+            #outputList.append([1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_auc_ave = roc_auc_score(np.array(labelList), np.array(outputList))
             epoch_auc = roc_auc_score(np.array(labelList), np.array(outputList), average=None)
@@ -191,7 +191,7 @@ class Model(nn.Module):
             nn.MaxPool2d(32)
         )
         self.prediction = nn.Sequential(
-            nn.Linear(512, 14),
+            nn.Linear(512, 9),
             nn.Sigmoid()
         )
 
@@ -200,7 +200,7 @@ class Model(nn.Module):
         x = self.transition(x)#512x32x32
         x = self.globalPool(x)#512x1x1
         x = x.view(x.size(0), -1)#512
-        x = self.prediction(x)#14
+        x = self.prediction(x)#9
         return x
 
 
@@ -208,14 +208,14 @@ def saveInfo(model):
     #save model
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-    torch.save(model.state_dict(), os.path.join(save_dir, "vgg.pth"))
+    torch.save(model.state_dict(), os.path.join(save_dir, "vgg_simple.pth"))
 
 
 if __name__ == '__main__':
     try:
         model = Model()
-        model.load_state_dict(torch.load(os.path.join(save_dir, "vgg.pth")))
-        print('continue previous model')
+        model.load_state_dict(torch.load(os.path.join(save_dir, "vgg_simple.pth")))
+        print('\nContinue previous model')
     except:
         model = Model()
 
@@ -228,6 +228,6 @@ if __name__ == '__main__':
             {'params':model.prediction.parameters()}],
             lr=7e-4)
 
-    model = train_model(model, optimizer, num_epochs = 50)
+    model = train_model(model, optimizer, num_epochs = 10)
     saveInfo(model)    
 

@@ -17,7 +17,7 @@ import os
 use_gpu = torch.cuda.is_available
 data_dir = "/data/CXR8/images"
 save_dir = "./savedModels"
-label_path = {'train':"./Train_Label.csv", 'val':"./Val_Label.csv", 'test':"Test_Label.csv"}
+label_path = {'train':"./Train_Label_simple.csv", 'val':"./Val_Label_simple.csv", 'test':"./Test_Label_simple.csv"}
 
 class CXRDataset(Dataset):
 
@@ -25,7 +25,7 @@ class CXRDataset(Dataset):
         self.labels_csv = pd.read_csv(csv_file, header=0)
         self.root_dir = root_dir
         self.transform = transform
-        self.classes = pd.read_csv(csv_file, header=None,nrows=1).ix[0, :].as_matrix()
+        self.classes = pd.read_csv(csv_file, header=None, nrows=1).ix[0, :].as_matrix()
         self.classes = self.classes[1:]
 
     def __len__(self):
@@ -43,9 +43,15 @@ class CXRDataset(Dataset):
         return sample
 
 def loadData(batch_size):
+    # TODO: Bad train after normalization
+    normalize = torchvision.transforms.Normalize(
+        mean=[126.69982635, 126.69982635, 126.69982635],
+        std=[58.66778696, 58.66778696, 58.66778696]
+    )
+
     trans = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
     image_datasets = {x: CXRDataset(label_path[x], data_dir, transform = trans)for x in ['train', 'val']}
-    dataloders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size, shuffle=False, num_workers=4)
+    dataloders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size, shuffle=False, num_workers=6)
                   for x in ['train', 'val']}
     dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
     print('Training data: {}\nValidation data: {}'.format(dataset_sizes['train'], dataset_sizes['val']))
@@ -54,7 +60,7 @@ def loadData(batch_size):
     return dataloders, dataset_sizes, class_names
 
 def train_model(model, optimizer, num_epochs=25):
-    batch_size = 3
+    batch_size = 50
     since = time.time()
     dataloders, dataset_sizes, class_names = loadData(batch_size)
     best_model_wts = model.state_dict()
@@ -90,7 +96,7 @@ def train_model(model, optimizer, num_epochs=25):
                 N = 0
                 for label in labels:
                     for v in label:
-                        if int(v) == 1: N += 1
+                        if int(v) == 0: N += 1
                         else: P += 1
                 try:
                     BP = (P + N)/P
@@ -113,7 +119,7 @@ def train_model(model, optimizer, num_epochs=25):
                 # forward
                 outputs = model(inputs)
                 out_data = outputs.data
-                criterion = nn.BCELoss(weight=weight)
+                criterion = nn.BCEWithLogitsLoss(weight=weight)
                 loss = criterion(outputs, labels)
 
                 # backward + optimize only if in training phase
@@ -139,11 +145,18 @@ def train_model(model, optimizer, num_epochs=25):
                     logLoss = 0
 
 
-            #labelList.append([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
-            #outputList.append([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
+            #labelList.append([1, 1, 1, 1, 1, 1, 1, 1, 1])
+            #outputList.append([1, 1, 1, 1, 1, 1, 1, 1, 1])
             epoch_loss = running_loss / dataset_sizes[phase]
-            epoch_auc_ave = roc_auc_score(np.array(labelList), np.array(outputList))
-            epoch_auc = roc_auc_score(np.array(labelList), np.array(outputList), average=None)
+            try:
+                epoch_auc_ave = roc_auc_score(np.array(labelList), np.array(outputList))
+            except ValueError:
+                epoch_auc_ave = 0.0
+
+            try:
+                epoch_auc = roc_auc_score(np.array(labelList), np.array(outputList), average=None)
+            except ValueError:
+                epoch_auc = np.zeros((len(class_names),))
 
             print('{} Loss: {:.4f} AUC: {:.4f}'.format(
                 phase, epoch_loss, epoch_auc_ave, epoch_auc))
@@ -178,44 +191,56 @@ def train_model(model, optimizer, num_epochs=25):
 class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
-        self.model_ft = models.vgg16(pretrained=True)
+        self.model_ft = models.alexnet(pretrained=True)
         self.model_ft = nn.Sequential(*list(self.model_ft.features.children())[:-1])
         for param in self.model_ft.parameters():
             param.requires_grad = False
 
         self.transition = nn.Sequential(
-            nn.Conv2d(512, 512, kernel_size=3, padding=1, stride=1, bias=False),
+            nn.Conv2d(256, 256, kernel_size=3, padding=2, stride=1, bias=False),
             nn.AvgPool2d(kernel_size=2, stride=2),
         )
         self.globalPool = nn.Sequential(
             nn.MaxPool2d(32)
         )
         self.prediction = nn.Sequential(
-            nn.Linear(512, 14),
-            nn.Sigmoid()
+            nn.Linear(256, 9),
         )
-
+    
     def forward(self, x):
-        x = self.model_ft(x)#512x32x32
-        x = self.transition(x)#512x32x32
-        x = self.globalPool(x)#512x1x1
-        x = x.view(x.size(0), -1)#512
-        x = self.prediction(x)#14
+        x = self.model_ft(x)#256x64x64
+        x = self.transition(x)#256x32x32
+        x = self.globalPool(x)#256x1x1
+        x = x.view(x.size(0), -1)#256
+        x = self.prediction(x)#9
         return x
 
+def returnCAM(feature_conv, weight_softmax, class_idx):
+    # generate the class activation maps upsample to 1024x1024
+    size_upsample = (1024, 1024)
+    bz, nc, h, w = feature_conv.shape
+    output_cam = []
+    for idx in class_idx:
+        cam = weight_softmax[idx].dot(feature_conv.reshape((nc, h*w)))
+        cam = cam.reshape(h, w)
+        cam = cam - np.min(cam)
+        cam_img = cam / np.max(cam)
+        cam_img = np.uint8(255 * cam_img)
+        output_cam.append(cv2.resize(cam_img, size_upsample))
+    return output_cam
 
 def saveInfo(model):
     #save model
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-    torch.save(model.state_dict(), os.path.join(save_dir, "vgg.pth"))
+    torch.save(model.state_dict(), os.path.join(save_dir, "alexnet_simple.pth"))
 
 
 if __name__ == '__main__':
     try:
         model = Model()
-        model.load_state_dict(torch.load(os.path.join(save_dir, "vgg.pth")))
-        print('continue previous model')
+        model.load_state_dict(torch.load(os.path.join(save_dir, "alexnet_simple.pth")))
+        print('\nUsing previous model')
     except:
         model = Model()
 
@@ -226,8 +251,8 @@ if __name__ == '__main__':
             {'params':model.transition.parameters()},
             {'params':model.globalPool.parameters()},
             {'params':model.prediction.parameters()}],
-            lr=7e-4)
+            lr=1e-3)
 
-    model = train_model(model, optimizer, num_epochs = 50)
+    model = train_model(model, optimizer, num_epochs = 100)
     saveInfo(model)    
 
