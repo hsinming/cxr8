@@ -51,7 +51,7 @@ def loadData(batch_size):
 
     trans = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
     image_datasets = {x: CXRDataset(label_path[x], data_dir, transform = trans)for x in ['train', 'val']}
-    dataloders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size, shuffle=False, num_workers=6)
+    dataloders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size, shuffle=True if x=='train' else False, num_workers=6, pin_memory=True)
                   for x in ['train', 'val']}
     dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
     print('Training data: {}\nValidation data: {}'.format(dataset_sizes['train'], dataset_sizes['val']))
@@ -119,7 +119,7 @@ def train_model(model, optimizer, num_epochs=25):
                 # forward
                 outputs = model(inputs)
                 out_data = outputs.data
-                criterion = nn.BCEWithLogitsLoss(weight=weight)
+                criterion = nn.BCELoss(weight=weight)
                 loss = criterion(outputs, labels)
 
                 # backward + optimize only if in training phase
@@ -191,6 +191,11 @@ def train_model(model, optimizer, num_epochs=25):
 class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
+        # Get number of classes
+        train_dataset = CXRDataset(label_path['train'], data_dir, transform = None)
+        classes = train_dataset.classes
+        self.n_class = len(classes)
+
         self.model_ft = models.alexnet(pretrained=True)
         self.model_ft = nn.Sequential(*list(self.model_ft.features.children())[:-1])
         for param in self.model_ft.parameters():
@@ -198,21 +203,29 @@ class Model(nn.Module):
 
         self.transition = nn.Sequential(
             nn.Conv2d(256, 256, kernel_size=3, padding=2, stride=1, bias=False),
-            nn.AvgPool2d(kernel_size=2, stride=2),
+            nn.AvgPool2d(kernel_size=2, stride=2)
         )
         self.globalPool = nn.Sequential(
             nn.MaxPool2d(32)
         )
         self.prediction = nn.Sequential(
-            nn.Linear(256, 9),
+            nn.Linear(256, self.n_class),
+            nn.Softmax(dim=1)
         )
     
     def forward(self, x):
-        x = self.model_ft(x)#256x64x64
-        x = self.transition(x)#256x32x32
-        x = self.globalPool(x)#256x1x1
-        x = x.view(x.size(0), -1)#256
-        x = self.prediction(x)#9
+        # input size: (bs,3,1024,1024)
+        # print('input x:{}'.format(x.size()))
+        x = self.model_ft(x) # (bs,256,63,63)
+        # print('model_ft(x):{}'.format(x.size()))
+        x = self.transition(x) # (bs,256,32,32)
+        # print('transition(x):{}'.format(x.size()))
+        x = self.globalPool(x) # (bs,256,1,1)
+        # print('globalPool(x):{}'.format(x.size()))
+        x = x.view(x.size(0), -1) # (bs,256)
+        # print('x.view:{}'.format(x.size()))
+        x = self.prediction(x) # (bs, 11)
+        # print('prediction(x):{}'.format(x.size()))
         return x
 
 def returnCAM(feature_conv, weight_softmax, class_idx):
@@ -253,6 +266,6 @@ if __name__ == '__main__':
             {'params':model.prediction.parameters()}],
             lr=1e-3)
 
-    model = train_model(model, optimizer, num_epochs = 100)
+    model = train_model(model, optimizer, num_epochs = 50)
     saveInfo(model)    
 

@@ -8,6 +8,8 @@ dist_path_train = "./Train_Label_simple.csv"
 dist_path_val = "./Val_Label_simple.csv"
 dist_path_test = "./Test_Label_simple.csv"
 
+INCLUDE_NO_FINDING = True
+
 
 disease_categories = {
         'Atelectasis': 0,
@@ -28,7 +30,9 @@ disease_categories = {
 
 # Re-classify the disease into common imaging findings.
 finding_categories = OrderedDict()
-finding_categories['Opacity'] = ['Atelectasis', 'Edema', 'Infiltration', 'Pneumonia', 'Consolidation']
+finding_categories['Opacity'] = ['Atelectasis', 'Pneumonia', 'Consolidation']
+finding_categories['Infiltration'] = ['Infiltration']
+finding_categories['Edema'] = ['Edema']
 finding_categories['Cardiomegaly'] = ['Cardiomegaly']
 finding_categories['Effusion'] = ['Effusion']
 finding_categories['Tumor'] = ['Mass', 'Nodule']
@@ -39,7 +43,7 @@ finding_categories['Pleural_Thickening'] = ['Pleural_Thickening']
 finding_categories['Hernia'] = ['Hernia']
 
 # Another re-classify of imaging finding
-finding_simple = {disease:k for k, v in finding_categories.items() for disease in v}
+disease_to_finding = {disease:k for k, v in finding_categories.items() for disease in v}
 
 if __name__ == '__main__':
     with open(source_path) as f:
@@ -69,17 +73,21 @@ if __name__ == '__main__':
                         split = lines[i].split(',')
                         file_name = split[0]
                         label_string = split[1]
+                        if not INCLUDE_NO_FINDING and label_string == 'NO Finding':
+                            continue
+
                         labels = label_string.split('|')
                         vector = [0 for _ in range(len(finding_categories))]
                         for label in labels:
+                            # Exclude "No Finding" because it is not accurate.
                             if label != "No Finding":
-                                vector[list(finding_categories.keys()).index(finding_simple[label])] = 1
+                                vector[list(finding_categories.keys()).index(disease_to_finding[label])] = 1
                         vector.insert(0, file_name)
                         if i <= line_number*0.7:
                             writer_train.writerow(vector)#70%
-                        elif i > line_number*0.7 and i <= line_number*0.8:
-                            writer_val.writerow(vector)#10%
+                        elif i > line_number*0.7 and i <= line_number*0.9:
+                            writer_val.writerow(vector)#20%
                         else :
-                            writer_test.writerow(vector)#20%
+                            writer_test.writerow(vector)#10%
     print("Label data generated")
                     

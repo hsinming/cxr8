@@ -178,12 +178,19 @@ def train_model(model, optimizer, num_epochs=25):
 class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
+        # Get number of classes
+        train_dataset = CXRDataset(label_path['train'], data_dir, transform=None)
+        classes = train_dataset.classes
+        self.n_class = len(classes)
+
         self.model_ft = models.vgg16(pretrained=True)
         self.model_ft = nn.Sequential(*list(self.model_ft.features.children())[:-1])
         for param in self.model_ft.parameters():
             param.requires_grad = False
 
         self.transition = nn.Sequential(
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
             nn.Conv2d(512, 512, kernel_size=3, padding=1, stride=1, bias=False),
             nn.AvgPool2d(kernel_size=2, stride=2),
         )
@@ -191,8 +198,8 @@ class Model(nn.Module):
             nn.MaxPool2d(32)
         )
         self.prediction = nn.Sequential(
-            nn.Linear(512, 14),
-            nn.Sigmoid()
+            nn.Linear(512, self.n_class),
+            nn.Softmax(dim=1)
         )
 
     def forward(self, x):

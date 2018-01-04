@@ -1,15 +1,15 @@
-import cv2
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.metrics import roc_auc_score
 from torch.autograd import Variable
-import pandas as pd
-import numpy as np
 import torchvision
 from torchvision import datasets, models, transforms
 from torch.utils.data import Dataset, DataLoader
 import torch.utils.model_zoo as model_zoo
+from sklearn.metrics import roc_auc_score
+import pandas as pd
+import numpy as np
+from PIL import Image
 import time
 import os
 
@@ -17,7 +17,7 @@ import os
 use_gpu = torch.cuda.is_available
 data_dir = "/data/CXR8/images"
 save_dir = "./savedModels"
-label_path = {'train':"./Train_Label_simple.csv", 'val':"./Val_Label_simple.csv", 'test':"./Test_Label_simple.csv"}
+label_path = {'train':"./Train_Label_simple.csv", 'val':"./Val_Label_simple.csv", 'test':"Test_Label_simple.csv"}
 
 class CXRDataset(Dataset):
 
@@ -33,7 +33,7 @@ class CXRDataset(Dataset):
 
     def __getitem__(self, idx):
         img_name = os.path.join(self.root_dir, self.labels_csv.ix[idx, 0])
-        image = cv2.imread(img_name)
+        image = Image.open(img_name).convert('RGB')
         if self.transform:
             image = self.transform(image)
         label = self.labels_csv.ix[idx, 1:].as_matrix().astype('float')
@@ -43,9 +43,9 @@ class CXRDataset(Dataset):
         return sample
 
 def loadData(batch_size):
-    trans = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
+    trans = transforms.Compose([transforms.Resize(224), transforms.ToTensor()])
     image_datasets = {x: CXRDataset(label_path[x], data_dir, transform = trans)for x in ['train', 'val']}
-    dataloders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size, shuffle=True if x=='train' else False, num_workers=4)
+    dataloders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size, shuffle=False, num_workers=4)
                   for x in ['train', 'val']}
     dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
     print('Training data: {}\nValidation data: {}'.format(dataset_sizes['train'], dataset_sizes['val']))
@@ -54,7 +54,7 @@ def loadData(batch_size):
     return dataloders, dataset_sizes, class_names
 
 def train_model(model, optimizer, num_epochs=25):
-    batch_size = 3 
+    batch_size = 100
     since = time.time()
     dataloders, dataset_sizes, class_names = loadData(batch_size)
     best_model_wts = model.state_dict()
@@ -77,10 +77,9 @@ def train_model(model, optimizer, num_epochs=25):
             running_loss = 0.0
             outputList = []
             labelList = []
-            num = 0
             logLoss = 0
             # Iterate over data.
-            for data in dataloders[phase]:
+            for idx, data in enumerate(dataloders[phase]):
                 # get the inputs
                 inputs = data['image']
                 labels = data['label']
@@ -123,6 +122,7 @@ def train_model(model, optimizer, num_epochs=25):
 
                 # statistics
                 running_loss += loss.data[0]
+                #print('running_loss = {}'.format(running_loss))
                 labels = labels.data.cpu().numpy()
                 out_data = out_data.cpu().numpy()
                 for i in range(out_data.shape[0]):
@@ -130,17 +130,16 @@ def train_model(model, optimizer, num_epochs=25):
                     labelList.append(labels[i].tolist())
                 
                 logLoss += loss.data[0]
-                num = num + 1
-                if(num%(5000/batch_size)==0):
-                    try: iterAuc =  roc_auc_score(np.array(labelList[-5000:]),
-                                                  np.array(outputList[-5000:]))
+                if(idx%(2000/batch_size)==0):
+                    try: iterAuc =  roc_auc_score(np.array(labelList[-2000:]),
+                                                  np.array(outputList[-2000:]))
                     except: iterAuc = 0
-                    print('{} {:.2f}% Loss: {:.4f} AUC: {:.4f}'.format(phase, 100*num/len(dataloders[phase]), logLoss/((5000/batch_size)*len(data)), iterAuc))
+                    print('{} {:.2f}% Loss: {:.4f} AUC: {:.4f}'.format(phase, 100*idx/len(dataloders[phase]), logLoss/((2000/batch_size)*len(data)), iterAuc))
                     logLoss = 0
 
 
-            #labelList.append([1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
-            #outputList.append([1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
+            #labelList.append([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
+            #outputList.append([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_auc_ave = roc_auc_score(np.array(labelList), np.array(outputList))
             epoch_auc = roc_auc_score(np.array(labelList), np.array(outputList), average=None)
@@ -183,45 +182,51 @@ class Model(nn.Module):
         classes = train_dataset.classes
         self.n_class = len(classes)
 
-        self.model_ft = models.vgg16(pretrained=True)
-        self.model_ft = nn.Sequential(*list(self.model_ft.features.children())[:-1])
+        self.model_ft = models.resnet50(pretrained=True)
+        self.model_ft = nn.Sequential(*list(self.model_ft.children())[:-2])
+
         for param in self.model_ft.parameters():
             param.requires_grad = False
 
         self.transition = nn.Sequential(
-            nn.BatchNorm2d(512),
+            nn.BatchNorm2d(2048),
             nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, kernel_size=3, padding=1, stride=1, bias=False),
-            nn.AvgPool2d(kernel_size=2, stride=2)
+            nn.Conv2d(2048, 2048, kernel_size=1, padding=0, stride=1, bias=False),
         )
         self.globalPool = nn.Sequential(
-            nn.MaxPool2d(32)
+            nn.AvgPool2d(7)
         )
         self.prediction = nn.Sequential(
-            nn.Linear(512, self.n_class),
+            nn.Linear(2048, self.n_class),
             nn.Softmax(dim=1)
         )
-
+    
     def forward(self, x):
-        x = self.model_ft(x)       #(bn,512,64,64)
-        x = self.transition(x)     #(bn,512,64,64)
-        x = self.globalPool(x)     #(bn,512,32,32)
-        x = x.view(x.size(0), -1)  #(bn,512*32*32)
-        x = self.prediction(x)     #(n_class)
+        # input x: (bs,3,224,224)
+        #print('input x size:{}'.format(x.size()))
+        x = self.model_ft(x) # (bs,2048,7,7)
+        #print('model_ft(x):{}'.format(x.size()))
+        x = self.transition(x) # (bs,2048,7,7)
+        #print('transition(x):{}'.format(x.size()))
+        x = self.globalPool(x) #(bs,2048,1,1)
+        #print('globalPool(x):{}'.format(x.size()))
+        x = x.view(x.size(0), -1) #(bs,2048)
+        #print('x.view:{}'.format(x.size()))
+        x = self.prediction(x)   #(bs,9)
+        #print('prediction(x):{}'.format(x.size()))
         return x
 
 def saveInfo(model):
     #save model
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-    torch.save(model.state_dict(), os.path.join(save_dir, "vgg_simple.pth"))
-
+    torch.save(model.state_dict(), os.path.join(save_dir, "resnet50_simple.pth"))
 
 if __name__ == '__main__':
     try:
         model = Model()
-        model.load_state_dict(torch.load(os.path.join(save_dir, "vgg_simple.pth")))
-        print('\nContinue previous model')
+        model.load_state_dict(torch.load(os.path.join(save_dir, "resnet50_simple.pth")))
+        print('\nUsing previous model')
     except:
         model = Model()
 
@@ -232,8 +237,8 @@ if __name__ == '__main__':
             {'params':model.transition.parameters()},
             {'params':model.globalPool.parameters()},
             {'params':model.prediction.parameters()}],
-            lr=7e-4)
+            lr=1e-3)
 
-    model = train_model(model, optimizer, num_epochs = 20)
-    saveInfo(model)    
+    model = train_model(model, optimizer, num_epochs = 10)
+    saveInfo(model)
 
