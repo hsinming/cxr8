@@ -54,7 +54,7 @@ def loadData(batch_size):
     return dataloders, dataset_sizes, class_names
 
 def train_model(model, optimizer, num_epochs=25):
-    batch_size = 8 
+    batch_size = 8
     since = time.time()
     dataloders, dataset_sizes, class_names = loadData(batch_size)
     best_model_wts = model.state_dict()
@@ -190,8 +190,9 @@ class Model(nn.Module):
 
         self.transition = nn.Sequential(
             nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
             nn.Conv2d(512, 512, kernel_size=3, padding=1, stride=1, bias=False),
+            nn.Dropout(),
+            nn.ReLU(inplace=True),
             nn.AvgPool2d(kernel_size=2, stride=2)
         )
         self.globalPool = nn.Sequential(
@@ -204,9 +205,9 @@ class Model(nn.Module):
 
     def forward(self, x):
         x = self.model_ft(x)       #(bn,512,64,64)
-        x = self.transition(x)     #(bn,512,64,64)
-        x = self.globalPool(x)     #(bn,512,32,32)
-        x = x.view(x.size(0), -1)  #(bn,512*32*32)
+        x = self.transition(x)     #(bn,512,32,32)
+        x = self.globalPool(x)     #(bn,512,1,1)
+        x = x.view(x.size(0), -1)  #(bn,512)
         x = self.prediction(x)     #(n_class)
         return x
 
