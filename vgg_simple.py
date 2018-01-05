@@ -54,7 +54,7 @@ def loadData(batch_size):
     return dataloders, dataset_sizes, class_names
 
 def train_model(model, optimizer, num_epochs=25):
-    batch_size = 3 
+    batch_size = 8 
     since = time.time()
     dataloders, dataset_sizes, class_names = loadData(batch_size)
     best_model_wts = model.state_dict()
