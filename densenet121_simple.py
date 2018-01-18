@@ -25,7 +25,7 @@ class CXRDataset(Dataset):
         self.labels_csv = pd.read_csv(csv_file, header=0)
         self.root_dir = root_dir
         self.transform = transform
-        self.classes = pd.read_csv(csv_file, header=None,nrows=1).ix[0, :].as_matrix()
+        self.classes = pd.read_csv(csv_file, header=None, nrows=1).ix[0, :].as_matrix()
         self.classes = self.classes[1:]
 
     def __len__(self):
@@ -62,7 +62,7 @@ def weighted_BCELoss(output, target, weights=None):
     return torch.sum(loss)
 
 def train_model(model, optimizer, num_epochs=10):
-    batch_size = 24
+    batch_size = 4
     since = time.time()
     dataloders, dataset_sizes, class_names = loadData(batch_size)
     best_model_wts = model.state_dict()
@@ -200,49 +200,27 @@ class Model(nn.Module):
         train_dataset = CXRDataset(label_path['train'], data_dir, transform=None)
         classes = train_dataset.classes
         self.n_class = len(classes)
-        self.model_ft = models.resnet50(pretrained=True)
-
-        for param in self.model_ft.parameters():
-            param.requires_grad = False
-
-        self.transition = nn.Sequential(
-            nn.Conv2d(2048, 2048, kernel_size=3, padding=1, stride=1, bias=False),
-        )
-        self.globalPool = nn.Sequential(
-            nn.MaxPool2d(32)
-        )
-        self.prediction = nn.Sequential(
-            nn.Linear(2048, self.n_class),
+        self.densenet121 = models.densenet121(pretrained=True)
+        num_ftrs = self.densenet121.classifier.in_features
+        self.densenet121.classifier = nn.Sequential(
+            nn.Linear(num_ftrs, self.n_class),
             nn.Sigmoid()
         )
     
     def forward(self, x):
-        x = self.model_ft.conv1(x)
-        x = self.model_ft.bn1(x)
-        x = self.model_ft.relu(x)
-        x = self.model_ft.maxpool(x)
-
-        x = self.model_ft.layer1(x)
-        x = self.model_ft.layer2(x)
-        x = self.model_ft.layer3(x)
-        x = self.model_ft.layer4(x)
-
-        x = self.transition(x)
-        x = self.globalPool(x)
-        x = x.view(x.size(0), -1)
-        x = self.prediction(x)
+        x = self.densenet121(x)
         return x
 
 def saveInfo(model):
     #save model
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-    torch.save(model.state_dict(), os.path.join(save_dir, "resnet50_simple.pth"))
+    torch.save(model.state_dict(), os.path.join(save_dir, "densenet121_simple.pth"))
 
 if __name__ == '__main__':
     try:
         model = Model()
-        model.load_state_dict(torch.load(os.path.join(save_dir, "resnet50_simple.pth")))
+        model.load_state_dict(torch.load(os.path.join(save_dir, "densenet121_simple.pth")))
         print('\nUsing previous model')
     except:
         model = Model()
@@ -251,9 +229,8 @@ if __name__ == '__main__':
         model = model.cuda()
 
     optimizer = optim.Adam([
-            {'params':model.transition.parameters()},
-            {'params':model.globalPool.parameters()},
-            {'params':model.prediction.parameters()}],
+            {'params':model.densenet121.classifier.parameters()},
+            ],
             lr=3e-5)
 
     model = train_model(model, optimizer, num_epochs = 5)
