@@ -62,7 +62,7 @@ def weighted_BCELoss(output, target, weights=None):
     return torch.sum(loss)
 
 def train_model(model, optimizer, num_epochs=10):
-    batch_size = 4
+    batch_size = 24
     since = time.time()
     dataloders, dataset_sizes, class_names = loadData(batch_size)
     best_model_wts = model.state_dict()
@@ -200,16 +200,30 @@ class Model(nn.Module):
         train_dataset = CXRDataset(label_path['train'], data_dir, transform=None)
         classes = train_dataset.classes
         self.n_class = len(classes)
-        self.densenet121 = models.densenet121(pretrained=True)
-        num_ftrs = self.densenet121.classifier.in_features
-        self.densenet121.classifier = nn.Sequential(
-            nn.Linear(num_ftrs, self.n_class),
+        self.model_ft = models.densenet121(pretrained=True)
+
+        for param in self.model_ft.parameters():
+            param.requires_grad = False
+
+        self.transition = nn.Sequential(
+            nn.Conv2d(1024, 1024, kernel_size=3, padding=1, stride=1, bias=False),
+        )
+        self.globalPool = nn.Sequential(
+            nn.MaxPool2d(32)
+        )
+        self.prediction = nn.Sequential(
+            nn.Linear(1024, self.n_class),
             nn.Sigmoid()
         )
     
     def forward(self, x):
-        x = self.densenet121(x)
+        x = self.model_ft.features(x)  #out(bs,1024,32,32)
+        x = self.transition(x)  # out(bs,1024,32,32)
+        x = self.globalPool(x)  # out(bs,1024,1,1)
+        x = x.view(x.size(0), -1)  # out(bs,1024)
+        x = self.prediction(x)
         return x
+
 
 def saveInfo(model):
     #save model
@@ -229,9 +243,10 @@ if __name__ == '__main__':
         model = model.cuda()
 
     optimizer = optim.Adam([
-            {'params':model.densenet121.classifier.parameters()},
-            ],
-            lr=3e-5)
+        {'params': model.transition.parameters()},
+        {'params': model.globalPool.parameters()},
+        {'params': model.prediction.parameters()}],
+        lr=3e-5)
 
     model = train_model(model, optimizer, num_epochs = 5)
     saveInfo(model)

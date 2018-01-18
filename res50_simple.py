@@ -225,11 +225,11 @@ class Model(nn.Module):
         x = self.model_ft.layer1(x)
         x = self.model_ft.layer2(x)
         x = self.model_ft.layer3(x)
-        x = self.model_ft.layer4(x)
+        x = self.model_ft.layer4(x) #out(bs,2048,32,32)
 
-        x = self.transition(x)
-        x = self.globalPool(x)
-        x = x.view(x.size(0), -1)
+        x = self.transition(x)      #out(bs,2048,32,32)
+        x = self.globalPool(x)      #out(bs,2048,1,1)
+        x = x.view(x.size(0), -1)   #out(bs,2048)
         x = self.prediction(x)
         return x
 
