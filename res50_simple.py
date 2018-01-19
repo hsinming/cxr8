@@ -2,10 +2,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
-import torchvision
-from torchvision import datasets, models, transforms
+from torchvision import models, transforms
 from torch.utils.data import Dataset, DataLoader
-import torch.utils.model_zoo as model_zoo
 from sklearn.metrics import roc_auc_score
 import pandas as pd
 import numpy as np
@@ -48,9 +46,9 @@ def loadData(batch_size):
                                 transforms.ToTensor(),
                                 transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
     image_datasets = {x: CXRDataset(label_path[x], data_dir, transform = trans)for x in ['train', 'val']}
-    dataloders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size,
-                                                 shuffle=True if x=='train' else False,
-                                                 num_workers=4)
+    dataloders = {x:DataLoader(image_datasets[x], batch_size=batch_size,
+                                                  shuffle=True if x=='train' else False,
+                                                  num_workers=4)
                   for x in ['train', 'val']}
     dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
     print('Training data: {}\nValidation data: {}'.format(dataset_sizes['train'], dataset_sizes['val']))
@@ -202,9 +200,11 @@ class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
         # Get number of classes
-        train_dataset = CXRDataset(label_path['train'], data_dir, transform=None)
-        classes = train_dataset.classes
+        classes = pd.read_csv(label_path['train'], header=None, nrows=1).ix[0, :].as_matrix()
+        classes = classes[1:]
         self.n_class = len(classes)
+
+        # Get features from resnet50
         self.model_ft = models.resnet50(pretrained=True)
 
         for param in self.model_ft.parameters():

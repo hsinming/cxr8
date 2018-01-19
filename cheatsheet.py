@@ -72,8 +72,7 @@ def get_mean_std_of_dataset(dir_path, sample_size=5):
     print("mean: {}".format(avg_mean), "stdev: {}".format(avg_std))
     return avg_mean, avg_std
 
-# Image Handling
-# Normalization
+# Image Normalization
 def norm_meanstd(arr, mean, std):
     return (arr - mean) / std
 
@@ -261,7 +260,7 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
     n_batches = len(dataloader)
     total_loss = 0
     total_acc = 0
-    for inputs,targets in dataloader:
+    for inputs, targets in dataloader:
         inputs = Variable(inputs.cuda())
         targets = Variable(targets.cuda())
         
@@ -324,8 +323,7 @@ def weights_init(m):
         m.bias.data.zero_()
 
 
-# Experiments
-# Load/Save weights
+# Experiments: Load/Save weights
 def save_weights(model, weights_dir, epoch):
     weights_fname = 'weights-%d.pth' % (epoch)
     weights_fpath = os.path.join(weights_dir, weights_fname)
@@ -340,7 +338,7 @@ def load_weights(model, fpath):
 class Experiment():
     def __init__(self, name, root, logger=None):
         self.name = name
-        self.root = os.path.join(root,name)
+        self.root = os.path.join(root, name)
         self.logger = logger
         self.epoch = 1
         self.best_val_loss = sys.maxsize
@@ -370,7 +368,7 @@ class Experiment():
 
     def log(self, msg):
         if self.logger:
-            logger.info(msg)
+            self.logger.info(msg)
         
     def init(self):
         self.log("Creating new experiment")
