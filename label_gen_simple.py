@@ -42,7 +42,7 @@ finding_categories['Fibrosis'] = ['Fibrosis']
 finding_categories['Pleural_Thickening'] = ['Pleural_Thickening']
 finding_categories['Hernia'] = ['Hernia']
 
-# Another re-classify of imaging finding
+# Another mapping of imaging finding
 disease_to_finding = {disease:k for k, v in finding_categories.items() for disease in v}
 
 if __name__ == '__main__':

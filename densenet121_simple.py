@@ -43,9 +43,13 @@ class CXRDataset(Dataset):
         return sample
 
 def loadData(batch_size):
-    trans = transforms.Compose([transforms.ToTensor()])
+    trans = transforms.Compose([transforms.RandomHorizontalFlip(),
+                                transforms.ToTensor(),
+                                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
     image_datasets = {x: CXRDataset(label_path[x], data_dir, transform = trans)for x in ['train', 'val']}
-    dataloders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size, shuffle=False, num_workers=4)
+    dataloders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size,
+                                                 shuffle=True if x == 'train' else False,
+                                                 num_workers=4)
                   for x in ['train', 'val']}
     dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
     print('Training data: {}\nValidation data: {}'.format(dataset_sizes['train'], dataset_sizes['val']))
@@ -207,6 +211,9 @@ class Model(nn.Module):
 
         self.transition = nn.Sequential(
             nn.Conv2d(1024, 1024, kernel_size=3, padding=1, stride=1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(1024),
+            nn.Dropout()
         )
         self.globalPool = nn.Sequential(
             nn.MaxPool2d(32)
@@ -229,12 +236,12 @@ def saveInfo(model):
     #save model
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-    torch.save(model.state_dict(), os.path.join(save_dir, "densenet121_simple.pth"))
+    torch.save(model.state_dict(), os.path.join(save_dir, "densenet121_simple_dropout_augment.pth"))
 
 if __name__ == '__main__':
     try:
         model = Model()
-        model.load_state_dict(torch.load(os.path.join(save_dir, "densenet121_simple.pth")))
+        model.load_state_dict(torch.load(os.path.join(save_dir, "densenet121_simple_dropout_augment.pth")))
         print('\nUsing previous model')
     except:
         model = Model()

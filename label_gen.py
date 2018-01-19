@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import csv
 import random
+from collections import OrderedDict
 
 source_path = "/data/CXR8/Data_Entry_2017.csv"
 dist_path_train = "./Train_Label.csv"
@@ -25,19 +26,6 @@ disease_categories = {
         'Hernia': 13,
         }
 
-# Re-classify the disease into common imaging findings.
-finding_categories = {
-    'Opacity': ['Atelectasis', 'Infiltration', 'Pneumonia', 'Consolidation'],
-    'Cardiomegaly': ['Cardiomegaly'],
-    'Effusion': ['Effusion'],
-    'Tumor': ['Mass', 'Nodule'],
-    'Pneumothorax': ['Pneumothorax'],
-    'Edema': ['Edema'],
-    'Emphysema': ['Emphysema'],
-    'Fibrosis': ['Fibrosis'],
-    'Pleural_Thickening': ['Pleural_Thickening'],
-    'Hernia': ['Hernia']
-}
 
 if __name__ == '__main__':
     with open(source_path) as f:
@@ -67,7 +55,7 @@ if __name__ == '__main__':
                         file_name = split[0]
                         label_string = split[1]
                         labels = label_string.split('|')
-                        vector = [0 for _ in range(14)]
+                        vector = [0 for _ in range(len(disease_categories))]
                         for label in labels:
                             if label != "No Finding":
                                 vector[disease_categories[label]] = 1
