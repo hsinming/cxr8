@@ -494,7 +494,7 @@ def adjust_learning_rate(lr, decay, optimizer, cur_epoch, n_epochs):
 def main():
     N_EPOCHS = 5
     MAX_PATIENCE = 50
-    LEARNING_RATE = 1e-4
+    LEARNING_RATE = 3e-5
     LR_DECAY = 0.995
     DECAY_LR_EVERY_N_EPOCHS = 1
     EXPERIMENT_NAME = 'resnet50_simple'
@@ -518,7 +518,7 @@ def main():
     logger = get_logger(ch_log_level=logging.INFO, fh_log_level=logging.INFO)
     model = ResNet50Modified(logger).cuda()
     criterion = nn.BCELoss()
-    #optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+
     optimizer = optim.Adam([{'params':model.transition.parameters()},
                             {'params':model.globalPool.parameters()},
                             {'params':model.prediction.parameters()}], lr=LEARNING_RATE)
