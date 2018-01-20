@@ -455,21 +455,21 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
         total_loss += loss.data[0]
         total_acc += accuracy
 
-        targets = targets.data.cpu().numpy().tolist()
-        for i in targets:
-            total_target.append(i)
+        targets = targets.data.cpu().numpy()
+        output = output.data.cpu().numpy()
+        for i in range(output.shape[0]):
+            total_output.append(output[i].tolist())
+            total_target.append(targets[i].tolist())
 
-        output = output.data.cpu().numpy().tolist()
-        for i in output:
-            total_output.append(i)
 
-        if idx%100 == 0 and idx != 0:
+        if idx % 100 == 0 and idx != 0:
             try:
-                iterAUC = roc_auc_score(np.array(total_target[-100*n_batches]),
-                                        np.array(total_output[-100*n_batches]))
+                iterAuc = roc_auc_score(np.array(total_target[-100 * n_batches:]),
+                                        np.array(total_output[-100 * n_batches:]))
             except:
-                iterAUC = -1
-            print("iterAUC:{}".format(iterAUC))
+                iterAuc = -1
+            print('Train AUC: {:.4f}'.format(iterAuc))
+
     mean_loss = total_loss / n_batches
     mean_acc = total_acc / n_batches
     return mean_loss, mean_acc
