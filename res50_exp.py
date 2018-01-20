@@ -42,7 +42,7 @@ import visdom
 import shutil
 import sys
 from pathlib import Path
-from functools import partial
+from sklearn.metrics import roc_auc_score
 
 
 use_gpu = torch.cuda.is_available
@@ -467,13 +467,13 @@ def get_weight(labels):
 
     try:
         BP = (P + N) / P
-    except:
-        BP = 100000
+    except ZeroDivisionError:
+        weights = [1, 1]
 
     try:
         BN = (P + N) / N
-    except:
-        BN = 100000
+    except ZeroDivisionError:
+        weights = [1, 1]
 
     weights = [BP, BN]
 
@@ -545,7 +545,6 @@ def main():
     logger = get_logger(ch_log_level=logging.INFO, fh_log_level=logging.INFO)
     model = ResNet50Modified(logger).cuda()
     criterion = weighted_BCELoss
-
     optimizer = optim.Adam([{'params':model.transition.parameters()},
                             {'params':model.globalPool.parameters()},
                             {'params':model.prediction.parameters()}], lr=LEARNING_RATE)
