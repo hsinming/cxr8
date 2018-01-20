@@ -430,6 +430,7 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
     total_loss = 0
     total_acc = 0
     for inputs, targets in dataloader:
+        weights = get_weight(targets)
         inputs = Variable(inputs.cuda())
         targets = Variable(targets.cuda())
 
@@ -439,7 +440,7 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
         ## Clear Gradients
         net.zero_grad()
 
-        loss = criterion(output, targets)
+        loss = criterion(output, targets, weights)
 
         ## Backprop
         loss.backward()
@@ -454,6 +455,32 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
     mean_loss = total_loss / n_batches
     mean_acc = total_acc / n_batches
     return mean_loss, mean_acc
+
+
+def get_weight(labels):
+    P, N, BP, BN = 0, 0, 0, 0
+    label_array = labels.numpy()
+    number, count = np.unique(label_array, return_counts=True)
+    frequency = dict(zip(number, count))
+    P = frequency[1]
+    N = frequency[0]
+
+    try:
+        BP = (P + N) / P
+    except:
+        BP = 100000
+
+    try:
+        BN = (P + N) / N
+    except:
+        BN = 100000
+
+    weights = [BP, BN]
+
+    if use_gpu:
+        weights = torch.FloatTensor(weights).cuda()
+
+    return weights
 
 
 def get_predictions(model_output):
@@ -517,7 +544,7 @@ def main():
 
     logger = get_logger(ch_log_level=logging.INFO, fh_log_level=logging.INFO)
     model = ResNet50Modified(logger).cuda()
-    criterion = nn.BCELoss()
+    criterion = weighted_BCELoss
 
     optimizer = optim.Adam([{'params':model.transition.parameters()},
                             {'params':model.globalPool.parameters()},

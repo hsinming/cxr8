@@ -143,7 +143,7 @@ def train_model(model, optimizer, num_epochs=10):
 
                 # statistics
                 running_loss += loss.data[0]
-                #print('running_loss = {}'.format(running_loss))
+
                 labels = labels.data.cpu().numpy()
                 out_data = out_data.cpu().numpy()
                 for i in range(out_data.shape[0]):
