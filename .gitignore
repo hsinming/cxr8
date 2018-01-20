@@ -3,4 +3,6 @@ log/*
 statistic/*
 savedModels/*
 nohup.out
+*.log
+.idea/*
 
