@@ -429,7 +429,10 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
     n_batches = len(dataloader)
     total_loss = 0
     total_acc = 0
-    for inputs, targets in dataloader:
+    total_target = []
+    total_output = []
+
+    for idx, (inputs, targets) in enumerate(dataloader):
         weights = get_weight(targets)
         inputs = Variable(inputs.cuda())
         targets = Variable(targets.cuda())
@@ -452,6 +455,21 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
         total_loss += loss.data[0]
         total_acc += accuracy
 
+        targets = targets.data.cpu().numpy().tolist()
+        for i in targets:
+            total_target.append(i)
+
+        output = output.data.cpu().numpy().tolist()
+        for i in output:
+            total_output.append(i)
+
+        if idx%100 == 0 and idx != 0:
+            try:
+                iterAUC = roc_auc_score(np.array(total_target[-100*n_batches]),
+                                        np.array(total_output[-100*n_batches]))
+            except:
+                iterAUC = -1
+            print("iterAUC:{}".format(iterAUC))
     mean_loss = total_loss / n_batches
     mean_acc = total_acc / n_batches
     return mean_loss, mean_acc
