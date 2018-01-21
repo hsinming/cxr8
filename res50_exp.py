@@ -427,6 +427,9 @@ def get_logger(ch_log_level=logging.ERROR,
 def train(net, dataloader, criterion, optimizer, epoch=1):
     net.train()
     n_batches = len(dataloader)
+    batch_size = dataloader.batch_size
+    classes = dataloader.dataset.classes
+    dataset_size = len(dataloader.dataset)
     total_loss = 0.0
     iterLoss = 0.0
     total_target = []
@@ -462,18 +465,20 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
 
         if idx % 100 == 0 and idx != 0:
             try:
-                iterAUC = roc_auc_score(np.array(total_target[-100 * n_batches:]),
-                                        np.array(total_output[-100 * n_batches:]))
+                iterAUC = roc_auc_score(np.array(total_target[-100 * batch_size:]),
+                                        np.array(total_output[-100 * batch_size:]))
             except:
                 iterAUC = -1
-            print('Training {:.2f}% Loss: {:.4f} AUC: {:.4f}'.format(100 * idx / n_batches, iterLoss / (100 * n_batches), iterAUC))
+            print('Training {:.2f}% Loss: {:.4f} AUC: {:.4f}'.format(100 * idx / n_batches, iterLoss / (100 * batch_size), iterAUC))
             iterLoss = 0
 
-    mean_loss = total_loss / n_batches
-    epoch_AUC_average = roc_auc_score(np.array(total_target), np.array(total_output))
-    epoch_AUC = roc_auc_score(np.array(total_target), np.array(total_output), average=None)
+    mean_loss = total_loss / dataset_size
+    mean_auc = roc_auc_score(np.array(total_target), np.array(total_output))
 
-    return mean_loss, epoch_AUC_average, epoch_AUC
+    #Calculate the scores for each class
+    classes_auc = roc_auc_score(np.array(total_target), np.array(total_output), average=None)
+
+    return mean_loss, mean_auc, classes_auc
 
 
 def get_weight(labels):
@@ -539,11 +544,11 @@ def adjust_learning_rate(lr, decay, optimizer, cur_epoch, n_epochs):
 
 def main():
     N_EPOCHS = 5
-    MAX_PATIENCE = 50
+    MAX_PATIENCE = 5
     LEARNING_RATE = 3e-5
     LR_DECAY = 0.995
     DECAY_LR_EVERY_N_EPOCHS = 1
-    EXPERIMENT_NAME = 'resnet50_simple'
+    EXPERIMENT_NAME = 'resnet50'
     CXR8_PATH = '/data/CXR8'
     BATCH_SIZE = 24
     CXR8_MEAN = np.array([125.867, 125.867, 125.867])
