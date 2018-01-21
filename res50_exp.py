@@ -470,7 +470,7 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
             print('Training {:.2f}% Loss: {:.4f} AUC: {:.4f}'.format(100 * idx / n_batches, iterLoss / (100 * batch_size), batch_auc))
             iterLoss = 0
 
-    mean_loss = total_loss / n_batches
+    mean_loss = total_loss / (n_batches * batch_size)
     mean_auc = get_auc(total_output, total_target)
 
     #Calculate the scores for each class, return a ndarray shape = (n_classes,)
@@ -536,6 +536,7 @@ def validate(net, dataloader, criterion, epoch=1):
     val_loss = 0
     n_batches = len(dataloader)
     classes = dataloader.dataset.classes
+    batch_size = dataloader.batch_size
 
     total_target = []
     total_output = []
@@ -553,7 +554,7 @@ def validate(net, dataloader, criterion, epoch=1):
             total_output.append(output[i].tolist())
             total_target.append(targets[i].tolist())
 
-    mean_loss = val_loss / n_batches
+    mean_loss = val_loss / (n_batches * batch_size)
     mean_auc = get_auc(total_output, total_target)
 
     # Calculate the scores for each class, return a ndarray shape = (n_classes,)
@@ -627,7 +628,7 @@ def main():
 
         ### Validate ###
         val_loss, val_auc, val_classes_auc = validate(model, val_loader, criterion, epoch)
-        logger.info('Val - Loss: {:.4f}, Auc: {:.4f}'.format(val_loss, val_auc))
+        logger.info('Epoch {:d}: Validate - Loss: {:.4f}\tAuc: {:.4f}'.format(epoch, val_loss, val_auc))
         time_elapsed = time.time() - since
         logger.info('Total Time {:.0f}m {:.0f}s\n'.format(
             time_elapsed // 60, time_elapsed % 60))
