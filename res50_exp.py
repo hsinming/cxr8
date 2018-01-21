@@ -203,7 +203,7 @@ class Experiment():
         val_auc = self.auc_history['val'][-1]
         txt = ("""Epoch: %d
             Train - Loss: %.3f Auc: %.3f
-            Test - Loss: %.3f Auc: %.3f""" % (self.epoch,
+            Validate - Loss: %.3f Auc: %.3f""" % (self.epoch,
                                               trn_loss, trn_auc, val_loss, val_auc))
         window = self.visdom_plots['summary']
         return self.viz.text(
@@ -237,7 +237,7 @@ class Experiment():
     def is_best_auc(self, auc):
         return auc > self.best_val_auc
 
-    def save_weights(self, model, trn_loss, val_loss, trn_auc, val_auc):
+    def save_weights(self, model, trn_loss, val_loss, trn_auc, val_auc, trn_classes_auc, val_classes_auc):
         weights_fname = self.name + '-weights-%d-%.3f-%.3f-%.3f-%.3f.pth' % (
             self.epoch, trn_loss, trn_auc, val_loss, val_auc)
         weights_fpath = os.path.join(self.weights_dir, weights_fname)
@@ -247,6 +247,8 @@ class Experiment():
             'val_loss': val_loss,
             'trn_auc': trn_auc,
             'val_auc': val_auc,
+            'trn_classes_auc': trn_classes_auc.tolist(),
+            'val_classes_auc': val_classes_auc.tolist(),
             'best_val_auc': self.best_val_auc,
             'best_val_auc_epoch': self.best_val_auc_epoch,
             'experiment': self.name,
@@ -266,7 +268,7 @@ class Experiment():
                 state['trn_auc'], state['val_loss'], state['val_auc']))
         return model, state
 
-    def save_optimizer(self, optimizer, val_loss):
+    def save_optimizer(self, optimizer, val_auc):
         optim_fname = self.name + '-optim-%d.pth' % (self.epoch)
         optim_fpath = os.path.join(self.weights_dir, optim_fname)
         torch.save({
@@ -275,7 +277,7 @@ class Experiment():
             'state_dict': optimizer.state_dict()
         }, optim_fpath)
         shutil.copyfile(optim_fpath, self.latest_optimizer)
-        if self.is_best_loss(val_loss):
+        if self.is_best_auc(val_auc):
             self.best_optimizer_path = optim_fpath
 
     def load_optimizer(self, optimizer, fpath):
@@ -429,7 +431,7 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
     n_batches = len(dataloader)
     batch_size = dataloader.batch_size
     classes = dataloader.dataset.classes
-    dataset_size = len(dataloader.dataset)
+
     total_loss = 0.0
     iterLoss = 0.0
     total_target = []
@@ -529,23 +531,21 @@ def get_auc(output, target, average='macro'):
     return auc
 
 
-def test(net, test_loader, criterion, epoch=1):
+def validate(net, dataloader, criterion, epoch=1):
     net.eval()
-    test_loss = 0
-    test_auc = 0
-    n_batches = len(test_loader)
-    batch_size = test_loader.batch_size
-    classes = test_loader.dataset.classes
-    dataset_size = len(test_loader.dataset)
+    val_loss = 0
+    n_batches = len(dataloader)
+    classes = dataloader.dataset.classes
+
     total_target = []
     total_output = []
 
-    for idx, (inputs, targets) in enumerate(test_loader):
+    for idx, (inputs, targets) in enumerate(dataloader):
         weights = get_weight(targets)
         inputs = Variable(inputs.cuda(), volatile=True)
         targets = Variable(targets.cuda())
         output = net(inputs)
-        test_loss += criterion(output, targets, weights=weights).data[0]
+        val_loss += criterion(output, targets, weights=weights).data[0]
 
         targets = targets.data.cpu().numpy()
         output = output.data.cpu().numpy()
@@ -553,19 +553,20 @@ def test(net, test_loader, criterion, epoch=1):
             total_output.append(output[i].tolist())
             total_target.append(targets[i].tolist())
 
-    test_loss = test_loss / n_batches
+    mean_loss = val_loss / n_batches
     mean_auc = get_auc(total_output, total_target)
 
     # Calculate the scores for each class, return a ndarray shape = (n_classes,)
     classes_auc = roc_auc_score(np.array(total_target), np.array(total_output), average=None)
 
-    print('Train Loss: {:.4f} AUC: {:.4f}'.format(mean_loss, mean_auc))
+    print('Validation Loss: {:.4f} AUC: {:.4f}'.format(mean_loss, mean_auc))
     print()
+
     for i, c in enumerate(classes):
         print('{}: {:.4f} '.format(c, classes_auc[i]))
     print()
 
-    return test_loss, test_auc
+    return mean_loss, mean_auc, classes_auc
 
 
 def adjust_learning_rate(lr, decay, optimizer, cur_epoch, n_epochs):
@@ -618,25 +619,25 @@ def main():
         since = time.time()
 
         ### Train ###
-        trn_loss, trn_auc_avg, trn_auc = train(model, train_loader, criterion, optimizer, epoch)
-        logger.info('Epoch {:d}: Train - Loss: {:.4f}\tAuc: {:.4f}'.format(epoch, trn_loss, trn_auc_avg))
+        trn_loss, trn_auc, trn_classes_auc = train(model, train_loader, criterion, optimizer, epoch)
+        logger.info('Epoch {:d}: Train - Loss: {:.4f}\tAuc: {:.4f}'.format(epoch, trn_loss, trn_auc))
         time_elapsed = time.time() - since
         logger.info('Train Time {:.0f}m {:.0f}s'.format(
             time_elapsed // 60, time_elapsed % 60))
 
-        ### Test ###
-        val_loss, val_acc = test(model, val_loader, criterion, epoch)
-        logger.info('Val - Loss: {:.4f}, Acc: {:.4f}'.format(val_loss, val_acc))
+        ### Validate ###
+        val_loss, val_auc, val_classes_auc = validate(model, val_loader, criterion, epoch)
+        logger.info('Val - Loss: {:.4f}, Auc: {:.4f}'.format(val_loss, val_auc))
         time_elapsed = time.time() - since
         logger.info('Total Time {:.0f}m {:.0f}s\n'.format(
             time_elapsed // 60, time_elapsed % 60))
 
         ### Save Metrics ###
-        exp.save_history('train', trn_loss, trn_auc_avg)
-        exp.save_history('val', val_loss, val_acc)
+        exp.save_history('train', trn_loss, trn_auc)
+        exp.save_history('val', val_loss, val_auc)
 
         ### Checkpoint ###
-        exp.save_weights(model, trn_loss, val_loss, trn_auc_avg, val_acc)
+        exp.save_weights(model, trn_loss, val_loss, trn_auc, val_auc, trn_classes_auc, val_classes_auc)
         exp.save_optimizer(optimizer, val_loss)
 
         ### Plot Online ###
