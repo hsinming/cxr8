@@ -167,7 +167,7 @@ def train_model(model, optimizer, num_epochs=10):
             epoch_auc = roc_auc_score(np.array(labelList), np.array(outputList), average=None)
 
             print('{} Loss: {:.4f} AUC: {:.4f}'.format(
-                phase, epoch_loss, epoch_auc_ave, epoch_auc))
+                phase, epoch_loss, epoch_auc_ave))
             print()
             for i, c in enumerate(class_names):
                 print('{}: {:.4f} '.format(c, epoch_auc[i]))

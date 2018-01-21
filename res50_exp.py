@@ -464,19 +464,21 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
 
 
         if idx % 100 == 0 and idx != 0:
-            try:
-                iterAUC = roc_auc_score(np.array(total_target[-100 * batch_size:]),
-                                        np.array(total_output[-100 * batch_size:]))
-            except:
-                iterAUC = -1
-            print('Training {:.2f}% Loss: {:.4f} AUC: {:.4f}'.format(100 * idx / n_batches, iterLoss / (100 * batch_size), iterAUC))
+            batch_auc = get_auc(total_output[-100 * batch_size:], total_target[-100 * batch_size:])
+            print('Training {:.2f}% Loss: {:.4f} AUC: {:.4f}'.format(100 * idx / n_batches, iterLoss / (100 * batch_size), batch_auc))
             iterLoss = 0
 
-    mean_loss = total_loss / dataset_size
-    mean_auc = roc_auc_score(np.array(total_target), np.array(total_output))
+    mean_loss = total_loss / n_batches
+    mean_auc = get_auc(total_output, total_target)
 
-    #Calculate the scores for each class
+    #Calculate the scores for each class, return a ndarray shape = (n_classes,)
     classes_auc = roc_auc_score(np.array(total_target), np.array(total_output), average=None)
+
+    print('Train Loss: {:.4f} AUC: {:.4f}'.format(mean_loss, mean_auc))
+    print()
+    for i, c in enumerate(classes):
+        print('{}: {:.4f} '.format(c, classes_auc[i]))
+    print()
 
     return mean_loss, mean_auc, classes_auc
 
@@ -518,20 +520,52 @@ def get_accuracy(preds, targets):
     return correct / len(targets)
 
 
+def get_auc(output, target, average='macro'):
+    try:
+        auc = roc_auc_score(np.array(target), np.array(output), average=average)
+    except:
+        auc = -1
+
+    return auc
+
+
 def test(net, test_loader, criterion, epoch=1):
     net.eval()
     test_loss = 0
-    test_acc = 0
-    for data, target in test_loader:
-        data = Variable(data.cuda(), volatile=True)
-        target = Variable(target.cuda())
-        output = net(data)
-        test_loss += criterion(output, target).data[0]
-        pred = get_predictions(output)
-        test_acc += get_accuracy(pred, target.data.cpu().numpy())
-    test_loss /= len(test_loader)  # n_batches
-    test_acc /= len(test_loader)
-    return test_loss, test_acc
+    test_auc = 0
+    n_batches = len(test_loader)
+    batch_size = test_loader.batch_size
+    classes = test_loader.dataset.classes
+    dataset_size = len(test_loader.dataset)
+    total_target = []
+    total_output = []
+
+    for idx, (inputs, targets) in enumerate(test_loader):
+        weights = get_weight(targets)
+        inputs = Variable(inputs.cuda(), volatile=True)
+        targets = Variable(targets.cuda())
+        output = net(inputs)
+        test_loss += criterion(output, targets, weights=weights).data[0]
+
+        targets = targets.data.cpu().numpy()
+        output = output.data.cpu().numpy()
+        for i in range(output.shape[0]):
+            total_output.append(output[i].tolist())
+            total_target.append(targets[i].tolist())
+
+    test_loss = test_loss / n_batches
+    mean_auc = get_auc(total_output, total_target)
+
+    # Calculate the scores for each class, return a ndarray shape = (n_classes,)
+    classes_auc = roc_auc_score(np.array(total_target), np.array(total_output), average=None)
+
+    print('Train Loss: {:.4f} AUC: {:.4f}'.format(mean_loss, mean_auc))
+    print()
+    for i, c in enumerate(classes):
+        print('{}: {:.4f} '.format(c, classes_auc[i]))
+    print()
+
+    return test_loss, test_auc
 
 
 def adjust_learning_rate(lr, decay, optimizer, cur_epoch, n_epochs):
