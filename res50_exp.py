@@ -58,8 +58,8 @@ class Experiment():
         self.root = os.path.join(root, name)
         self.logger = logger
         self.epoch = 1
-        self.best_val_loss = sys.maxsize
-        self.best_val_loss_epoch = 1
+        self.best_val_auc = 0
+        self.best_val_auc_epoch = 1
         self.weights_dir = os.path.join(self.root, 'weights')
         self.history_dir = os.path.join(self.root, 'history')
         self.results_dir = os.path.join(self.root, 'results')
@@ -75,7 +75,7 @@ class Experiment():
             'val': np.array([]),
             'test': np.array([])
         }
-        self.acc_history = {
+        self.auc_history = {
             'train': np.array([]),
             'val': np.array([]),
             'test': np.array([])
@@ -102,8 +102,8 @@ class Experiment():
         model, state = self.load_weights(model, weights_fpath)
         optim = self.load_optimizer(optim, optim_path)
 
-        self.best_val_loss = state['best_val_loss']
-        self.best_val_loss_epoch = state['best_val_loss_epoch']
+        self.best_val_auc = state['best_val_auc']
+        self.best_val_auc_epoch = state['best_val_auc_epoch']
         self.epoch = state['last_epoch'] + 1
         self.load_history_from_file('train')
         self.load_history_from_file('val')
@@ -131,11 +131,11 @@ class Experiment():
 
     def init_visdom_plots(self):
         loss = self.init_viz_train_plot('loss')
-        accuracy = self.init_viz_train_plot('accuracy')
+        auc = self.init_viz_txt_plot('auc')
         summary = self.init_viz_txt_plot('summary')
         return {
             'loss': loss,
-            'accuracy': accuracy,
+            'auc': auc,
             'summary': summary
         }
 
@@ -179,32 +179,32 @@ class Experiment():
             ),
         )
 
-    def update_viz_acc_plot(self):
-        acc = np.stack([self.acc_history['train'],
-                        self.acc_history['val']], 1)
-        window = self.visdom_plots['accuracy']
+    def update_viz_auc_plot(self):
+        loss = np.stack([self.loss_history['train'],
+                         self.loss_history['val']], 1)
+        window = self.visdom_plots['auc']
         return self.viz.line(
             X=self.viz_epochs(),
-            Y=acc,
+            Y=loss,
             win=window,
             env=self.name,
             opts=dict(
                 xlabel='epoch',
-                ylabel='accuracy',
-                title=self.name + ' ' + 'accuracy',
+                ylabel='auc',
+                title=self.name + ' ' + 'auc',
                 legend=['Train', 'Validation']
-            )
+            ),
         )
 
     def update_viz_summary_plot(self):
         trn_loss = self.loss_history['train'][-1]
         val_loss = self.loss_history['val'][-1]
-        trn_acc = self.acc_history['train'][-1]
-        val_acc = self.acc_history['val'][-1]
+        trn_auc = self.auc_history['train'][-1]
+        val_auc = self.auc_history['val'][-1]
         txt = ("""Epoch: %d
-            Train - Loss: %.3f Acc: %.3f
-            Test - Loss: %.3f Acc: %.3f""" % (self.epoch,
-                                              trn_loss, trn_acc, val_loss, val_acc))
+            Train - Loss: %.3f Auc: %.3f
+            Test - Loss: %.3f Auc: %.3f""" % (self.epoch,
+                                              trn_loss, trn_auc, val_loss, val_auc))
         window = self.visdom_plots['summary']
         return self.viz.text(
             txt,
@@ -216,44 +216,44 @@ class Experiment():
         fpath = os.path.join(self.history_dir, dset_type + '.csv')
         data = np.loadtxt(fpath, delimiter=',').reshape(-1, 3)
         self.loss_history[dset_type] = data[:, 1]
-        self.acc_history[dset_type] = data[:, 2]
+        self.auc_history[dset_type] = data[:, 2]
 
-    def append_history_to_file(self, dset_type, loss, acc):
+    def append_history_to_file(self, dset_type, loss, auc):
         fpath = os.path.join(self.history_dir, dset_type + '.csv')
         with open(fpath, 'a') as f:
-            f.write('{},{},{}\n'.format(self.epoch, loss, acc))
+            f.write('{},{},{}\n'.format(self.epoch, loss, auc))
 
-    def save_history(self, dset_type, loss, acc):
+    def save_history(self, dset_type, loss, auc):
         self.loss_history[dset_type] = np.append(
             self.loss_history[dset_type], loss)
-        self.acc_history[dset_type] = np.append(
-            self.acc_history[dset_type], acc)
-        self.append_history_to_file(dset_type, loss, acc)
+        self.auc_history[dset_type] = np.append(
+            self.auc_history[dset_type], auc)
+        self.append_history_to_file(dset_type, loss, auc)
 
-        if dset_type == 'val' and self.is_best_loss(loss):
-            self.best_val_loss = loss
-            self.best_val_loss_epoch = self.epoch
+        if dset_type == 'val' and self.is_best_auc(auc):
+            self.best_val_auc = auc
+            self.best_val_auc_epoch = self.epoch
 
-    def is_best_loss(self, loss):
-        return loss < self.best_val_loss
+    def is_best_auc(self, auc):
+        return auc > self.best_val_auc
 
-    def save_weights(self, model, trn_loss, val_loss, trn_acc, val_acc):
+    def save_weights(self, model, trn_loss, val_loss, trn_auc, val_auc):
         weights_fname = self.name + '-weights-%d-%.3f-%.3f-%.3f-%.3f.pth' % (
-            self.epoch, trn_loss, trn_acc, val_loss, val_acc)
+            self.epoch, trn_loss, trn_auc, val_loss, val_auc)
         weights_fpath = os.path.join(self.weights_dir, weights_fname)
         torch.save({
             'last_epoch': self.epoch,
             'trn_loss': trn_loss,
             'val_loss': val_loss,
-            'trn_acc': trn_acc,
-            'val_acc': val_acc,
-            'best_val_loss': self.best_val_loss,
-            'best_val_loss_epoch': self.best_val_loss_epoch,
+            'trn_auc': trn_auc,
+            'val_auc': val_auc,
+            'best_val_auc': self.best_val_auc,
+            'best_val_auc_epoch': self.best_val_auc_epoch,
             'experiment': self.name,
             'state_dict': model.state_dict()
         }, weights_fpath)
         shutil.copyfile(weights_fpath, self.latest_weights)
-        if self.is_best_loss(val_loss):
+        if self.is_best_auc(val_auc):
             self.best_weights_path = weights_fpath
 
     def load_weights(self, model, fpath):
@@ -261,9 +261,9 @@ class Experiment():
         state = torch.load(fpath)
         model.load_state_dict(state['state_dict'])
         self.log(
-            "loaded weights from experiment %s (last_epoch %d, trn_loss %s, trn_acc %s, val_loss %s, val_acc %s)" % (
+            "loaded weights from experiment %s (last_epoch %d, trn_loss %s, trn_auc %s, val_loss %s, val_auc %s)" % (
                 self.name, state['last_epoch'], state['trn_loss'],
-                state['trn_acc'], state['val_loss'], state['val_acc']))
+                state['trn_auc'], state['val_loss'], state['val_auc']))
         return model, state
 
     def save_optimizer(self, optimizer, val_loss):
@@ -290,8 +290,8 @@ class Experiment():
         trn_data = np.loadtxt(self.train_history_fpath, delimiter=',').reshape(-1, 3)
         val_data = np.loadtxt(self.val_history_fpath, delimiter=',').reshape(-1, 3)
 
-        trn_epoch, trn_loss, trn_acc = np.split(trn_data, [1, 2], axis=1)
-        val_epoch, val_loss, val_acc = np.split(val_data, [1, 2], axis=1)
+        trn_epoch, trn_loss, trn_auc = np.split(trn_data, [1, 2], axis=1)
+        val_epoch, val_loss, val_auc = np.split(val_data, [1, 2], axis=1)
 
         # Loss
         fig, ax = plt.subplots(1, 1, figsize=(6, 5))
@@ -304,20 +304,20 @@ class Experiment():
         loss_fname = os.path.join(self.history_dir, 'loss.png')
         plt.savefig(loss_fname)
 
-        # Accuracy
+        # AUC-ROC
         fig, ax = plt.subplots(1, 1, figsize=(6, 5))
-        plt.plot(trn_epoch, trn_acc, label='Train')
-        plt.plot(val_epoch, val_acc, label='Validation')
+        plt.plot(trn_epoch, trn_auc, label='Train')
+        plt.plot(val_epoch, val_auc, label='Validation')
         plt.xlabel('Epoch')
-        plt.ylabel('Accuracy')
+        plt.ylabel('AUC')
         ax.set_yscale('log')
         plt.legend()
-        acc_fname = os.path.join(self.history_dir, 'accuracy.png')
-        plt.savefig(acc_fname)
+        auc_fname = os.path.join(self.history_dir, 'auc.png')
+        plt.savefig(auc_fname)
 
-        # Combined View - loss-accuracy.png
-        loss_acc_fname = os.path.join(self.history_dir, 'loss-acc.png')
-        os.system('convert +append {} {} {}'.format(loss_fname, acc_fname, loss_acc_fname))
+        # Combined View - loss-auc.png
+        loss_auc_fname = os.path.join(self.history_dir, 'loss-auc.png')
+        os.system('convert +append {} {} {}'.format(loss_fname, auc_fname, loss_auc_fname))
 
 
 class ResNet50Modified(nn.Module):
@@ -427,8 +427,8 @@ def get_logger(ch_log_level=logging.ERROR,
 def train(net, dataloader, criterion, optimizer, epoch=1):
     net.train()
     n_batches = len(dataloader)
-    total_loss = 0
-    total_acc = 0
+    total_loss = 0.0
+    iterLoss = 0.0
     total_target = []
     total_output = []
 
@@ -449,11 +449,9 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
         loss.backward()
         optimizer.step()
 
-        preds = get_predictions(output)
-        accuracy = get_accuracy(preds, targets.data.cpu().numpy())
-
+        ## Statics
+        iterLoss += loss.data[0]
         total_loss += loss.data[0]
-        total_acc += accuracy
 
         targets = targets.data.cpu().numpy()
         output = output.data.cpu().numpy()
@@ -464,15 +462,18 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
 
         if idx % 100 == 0 and idx != 0:
             try:
-                iterAuc = roc_auc_score(np.array(total_target[-100 * n_batches:]),
+                iterAUC = roc_auc_score(np.array(total_target[-100 * n_batches:]),
                                         np.array(total_output[-100 * n_batches:]))
             except:
-                iterAuc = -1
-            print('Train AUC: {:.4f}'.format(iterAuc))
+                iterAUC = -1
+            print('Training {:.2f}% Loss: {:.4f} AUC: {:.4f}'.format(100 * idx / n_batches, iterLoss / (100 * n_batches), iterAUC))
+            iterLoss = 0
 
     mean_loss = total_loss / n_batches
-    mean_acc = total_acc / n_batches
-    return mean_loss, mean_acc
+    epoch_AUC_average = roc_auc_score(np.array(total_target), np.array(total_output))
+    epoch_AUC = roc_auc_score(np.array(total_target), np.array(total_output), average=None)
+
+    return mean_loss, epoch_AUC_average, epoch_AUC
 
 
 def get_weight(labels):
@@ -578,8 +579,8 @@ def main():
         since = time.time()
 
         ### Train ###
-        trn_loss, trn_acc = train(model, train_loader, criterion, optimizer, epoch)
-        logger.info('Epoch {:d}: Train - Loss: {:.4f}\tAcc: {:.4f}'.format(epoch, trn_loss, trn_acc))
+        trn_loss, trn_auc_avg, trn_auc = train(model, train_loader, criterion, optimizer, epoch)
+        logger.info('Epoch {:d}: Train - Loss: {:.4f}\tAuc: {:.4f}'.format(epoch, trn_loss, trn_auc_avg))
         time_elapsed = time.time() - since
         logger.info('Train Time {:.0f}m {:.0f}s'.format(
             time_elapsed // 60, time_elapsed % 60))
@@ -592,23 +593,23 @@ def main():
             time_elapsed // 60, time_elapsed % 60))
 
         ### Save Metrics ###
-        exp.save_history('train', trn_loss, trn_acc)
+        exp.save_history('train', trn_loss, trn_auc_avg)
         exp.save_history('val', val_loss, val_acc)
 
         ### Checkpoint ###
-        exp.save_weights(model, trn_loss, val_loss, trn_acc, val_acc)
+        exp.save_weights(model, trn_loss, val_loss, trn_auc_avg, val_acc)
         exp.save_optimizer(optimizer, val_loss)
 
         ### Plot Online ###
         exp.update_viz_loss_plot()
-        exp.update_viz_acc_plot()
+        exp.update_viz_auc_plot()
         exp.update_viz_summary_plot()
 
         ## Early Stopping ##
-        if (epoch - exp.best_val_loss_epoch) > MAX_PATIENCE:
+        if (epoch - exp.best_val_auc_epoch) > MAX_PATIENCE:
             logger.info(("Early stopping at epoch %d since no "
-                         + "better loss found since epoch %.3")
-                        % (epoch, exp.best_val_loss))
+                         + "better auc found since epoch %.3")
+                        % (epoch, exp.best_val_auc))
             break
 
         ### Adjust Lr ###
