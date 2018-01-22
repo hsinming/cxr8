@@ -1,28 +1,15 @@
 import torch
 import torch.nn as nn
-import torch.nn.init as init
 import torch.optim as optim
-import torch.nn.functional as F
 from torch.autograd import Variable
-
-import torchvision.datasets as datasets
 import torchvision.transforms as transforms
-import torchvision.utils as tv_utils
-
 from torch.utils.data import DataLoader, Dataset
 import torchvision.models as models
-import torch.backends.cudnn as cudnn
-import torchvision
-import torch.autograd as autograd
+
 from PIL import Image
 import imp
-import math
 import time
-import random
-import scipy.misc
 import logging
-
-from tqdm import tqdm
 import matplotlib as mpl
 mpl.use('Agg')
 import matplotlib.pyplot as plt
@@ -42,12 +29,12 @@ use_gpu = torch.cuda.is_available
 data_dir = "/data/CXR8/images"
 save_dir = "./savedModels"
 label_path = {'train':"./Train_Label_simple.csv", 'val':"./Val_Label_simple.csv", 'test':"Test_Label_simple.csv"}
-N_EPOCHS = 5
-MAX_PATIENCE = 2
+N_EPOCHS = 10
+MAX_PATIENCE = 3
 LEARNING_RATE = 3e-5
 LR_DECAY = 0.995
 DECAY_LR_EVERY_N_EPOCHS = 1
-EXPERIMENT_NAME = 'resnet50_simple'
+EXPERIMENT_NAME = 'resnet50_flip'
 CXR8_PATH = '/data/CXR8'
 BATCH_SIZE = 24
 CXR8_MEAN = np.array([125.867, 125.867, 125.867])
@@ -580,10 +567,8 @@ def adjust_learning_rate(lr, decay, optimizer, cur_epoch, n_epochs):
 
 def new_experiment():
     normTransform = transforms.Normalize(CXR8_MEAN, CXR8_STD)
-    trainTransform = transforms.Compose([transforms.RandomHorizontalFlip(),
-                                         transforms.ToTensor(),
-                                         normTransform])
-    valTransform = transforms.Compose([transforms.ToTensor(), normTransform])
+    trainTransform = transforms.Compose([transforms.RandomHorizontalFlip(), transforms.ToTensor()])
+    valTransform = transforms.Compose([transforms.ToTensor()])
 
     train_dataset = CXRDataset(label_path['train'], data_dir, transform=trainTransform)
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
@@ -649,10 +634,8 @@ def new_experiment():
 
 def resume_experiment():
     normTransform = transforms.Normalize(CXR8_MEAN, CXR8_STD)
-    trainTransform = transforms.Compose([transforms.RandomHorizontalFlip(),
-                                         transforms.ToTensor(),
-                                         normTransform])
-    valTransform = transforms.Compose([transforms.ToTensor(), normTransform])
+    trainTransform = transforms.Compose([transforms.RandomHorizontalFlip(), transforms.ToTensor()])
+    valTransform = transforms.Compose([transforms.ToTensor()])
 
     train_dataset = CXRDataset(label_path['train'], data_dir, transform=trainTransform)
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
@@ -718,7 +701,8 @@ def resume_experiment():
 
 
 def main():
-    resume_experiment()
+    new_experiment()
+    #resume_experiment()
 
 
 if __name__=="__main__":
