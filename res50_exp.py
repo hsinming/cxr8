@@ -16,16 +16,10 @@ import torchvision
 import torch.autograd as autograd
 from PIL import Image
 import imp
-import os
-import sys
 import math
 import time
 import random
-import shutil
-import cv2
 import scipy.misc
-from glob import glob
-import sklearn
 import logging
 
 from tqdm import tqdm
@@ -37,18 +31,27 @@ plt.style.use('bmh')
 import numpy as np
 import pandas as pd
 import os
-import torch
 import visdom
 import shutil
 import sys
 from pathlib import Path
 from sklearn.metrics import roc_auc_score
 
-
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 use_gpu = torch.cuda.is_available
 data_dir = "/data/CXR8/images"
 save_dir = "./savedModels"
 label_path = {'train':"./Train_Label_simple.csv", 'val':"./Val_Label_simple.csv", 'test':"Test_Label_simple.csv"}
+N_EPOCHS = 5
+MAX_PATIENCE = 2
+LEARNING_RATE = 3e-5
+LR_DECAY = 0.995
+DECAY_LR_EVERY_N_EPOCHS = 1
+EXPERIMENT_NAME = 'resnet50_simple'
+CXR8_PATH = '/data/CXR8'
+BATCH_SIZE = 24
+CXR8_MEAN = np.array([125.867, 125.867, 125.867])
+CXR8_STD = np.array([58.158, 58.158, 58.158])
 
 
 
@@ -180,12 +183,12 @@ class Experiment():
         )
 
     def update_viz_auc_plot(self):
-        loss = np.stack([self.loss_history['train'],
-                         self.loss_history['val']], 1)
+        auc = np.stack([self.auc_history['train'],
+                        self.auc_history['val']], 1)
         window = self.visdom_plots['auc']
         return self.viz.line(
             X=self.viz_epochs(),
-            Y=loss,
+            Y=auc,
             win=window,
             env=self.name,
             opts=dict(
@@ -323,13 +326,10 @@ class Experiment():
 
 
 class ResNet50Modified(nn.Module):
-    def __init__(self, logger=None):
+    def __init__(self, n_classes, logger=None):
         super(ResNet50Modified, self).__init__()
+        self.n_class = n_classes
         self.logger=logger
-        # Get number of classes
-        classes = pd.read_csv(label_path['train'], header=None, nrows=1).ix[0, :].as_matrix()
-        classes = classes[1:]
-        self.n_class = len(classes)
 
         # Get features from resnet50
         self.model_ft = models.resnet50(pretrained=True)
@@ -578,39 +578,26 @@ def adjust_learning_rate(lr, decay, optimizer, cur_epoch, n_epochs):
         param_group['lr'] = new_lr
 
 
-def main():
-    N_EPOCHS = 5
-    MAX_PATIENCE = 5
-    LEARNING_RATE = 3e-5
-    LR_DECAY = 0.995
-    DECAY_LR_EVERY_N_EPOCHS = 1
-    EXPERIMENT_NAME = 'resnet50'
-    CXR8_PATH = '/data/CXR8'
-    BATCH_SIZE = 24
-    CXR8_MEAN = np.array([125.867, 125.867, 125.867])
-    CXR8_STD = np.array([58.158, 58.158, 58.158])
+def new_experiment():
     normTransform = transforms.Normalize(CXR8_MEAN, CXR8_STD)
-
     trainTransform = transforms.Compose([transforms.RandomHorizontalFlip(),
                                          transforms.ToTensor(),
                                          normTransform])
-    valTransform = transforms.Compose([transforms.ToTensor(),
-                                        normTransform])
+    valTransform = transforms.Compose([transforms.ToTensor(), normTransform])
 
     train_dataset = CXRDataset(label_path['train'], data_dir, transform=trainTransform)
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
     val_dataset = CXRDataset(label_path['val'], data_dir, transform=valTransform)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 
+    n_classes = len(train_dataset.classes)
     logger = get_logger(ch_log_level=logging.INFO, fh_log_level=logging.INFO)
-    model = ResNet50Modified(logger).cuda()
+    model = ResNet50Modified(n_classes, logger).cuda()
     criterion = weighted_BCELoss
-    optimizer = optim.Adam([{'params':model.transition.parameters()},
-                            {'params':model.globalPool.parameters()},
-                            {'params':model.prediction.parameters()}], lr=LEARNING_RATE)
+    optimizer = optim.Adam([{'params': model.transition.parameters()},
+                            {'params': model.globalPool.parameters()},
+                            {'params': model.prediction.parameters()}], lr=LEARNING_RATE)
 
-    print('  + Number of params: {}'.format(
-        sum([p.data.nelement() for p in model.parameters()])))
     exp = Experiment(EXPERIMENT_NAME, CXR8_PATH, logger)
 
     # Create New Experiment
@@ -658,6 +645,80 @@ def main():
                              epoch, DECAY_LR_EVERY_N_EPOCHS)
 
         exp.epoch += 1
+
+
+def resume_experiment():
+    normTransform = transforms.Normalize(CXR8_MEAN, CXR8_STD)
+    trainTransform = transforms.Compose([transforms.RandomHorizontalFlip(),
+                                         transforms.ToTensor(),
+                                         normTransform])
+    valTransform = transforms.Compose([transforms.ToTensor(), normTransform])
+
+    train_dataset = CXRDataset(label_path['train'], data_dir, transform=trainTransform)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+    val_dataset = CXRDataset(label_path['val'], data_dir, transform=valTransform)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+
+    logger = get_logger(ch_log_level=logging.INFO, fh_log_level=logging.INFO)
+    n_classes = len(train_dataset.classes)
+    model = ResNet50Modified(n_classes, logger).cuda()
+    criterion = weighted_BCELoss
+    optimizer = optim.Adam([{'params': model.transition.parameters()},
+                            {'params': model.globalPool.parameters()},
+                            {'params': model.prediction.parameters()}], lr=LEARNING_RATE)
+
+    exp = Experiment(EXPERIMENT_NAME, CXR8_PATH, logger)
+
+    # Load saved weights and optimizer
+    model, optimizer = exp.resume(model, optimizer)
+
+    # Resume train and validate
+    for epoch in range(exp.epoch, exp.epoch + N_EPOCHS):
+        since = time.time()
+
+        ### Train ###
+        trn_loss, trn_auc, trn_classes_auc = train(model, train_loader, criterion, optimizer, epoch)
+        logger.info('Epoch {:d}: Train - Loss: {:.4f}\tAuc: {:.4f}'.format(epoch, trn_loss, trn_auc))
+        time_elapsed = time.time() - since
+        logger.info('Train Time {:.0f}m {:.0f}s'.format(
+            time_elapsed // 60, time_elapsed % 60))
+
+        ### Validate ###
+        val_loss, val_auc, val_classes_auc = validate(model, val_loader, criterion, epoch)
+        logger.info('Epoch {:d}: Validate - Loss: {:.4f}\tAuc: {:.4f}'.format(epoch, val_loss, val_auc))
+        time_elapsed = time.time() - since
+        logger.info('Total Time {:.0f}m {:.0f}s\n'.format(
+            time_elapsed // 60, time_elapsed % 60))
+
+        ### Save Metrics ###
+        exp.save_history('train', trn_loss, trn_auc)
+        exp.save_history('val', val_loss, val_auc)
+
+        ### Checkpoint ###
+        exp.save_weights(model, trn_loss, val_loss, trn_auc, val_auc, trn_classes_auc, val_classes_auc)
+        exp.save_optimizer(optimizer, val_loss)
+
+        ### Plot Online ###
+        exp.update_viz_loss_plot()
+        exp.update_viz_auc_plot()
+        exp.update_viz_summary_plot()
+
+        ## Early Stopping ##
+        if (epoch - exp.best_val_auc_epoch) > MAX_PATIENCE:
+            logger.info(("Early stopping at epoch %d since no "
+                         + "better auc found since epoch %.3")
+                        % (epoch, exp.best_val_auc))
+            break
+
+        ### Adjust Lr ###
+        adjust_learning_rate(LEARNING_RATE, LR_DECAY, optimizer,
+                             epoch, DECAY_LR_EVERY_N_EPOCHS)
+
+        exp.epoch += 1
+
+
+def main():
+    resume_experiment()
 
 
 if __name__=="__main__":
