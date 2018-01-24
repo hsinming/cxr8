@@ -1,10 +1,11 @@
+#!/usr/bin/python3
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Dataset
-import torchvision.models as models
+
 
 from PIL import Image
 import imp
@@ -23,18 +24,19 @@ import shutil
 import sys
 from pathlib import Path
 from sklearn.metrics import roc_auc_score
+from net_model import SE_ResNet50
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 use_gpu = torch.cuda.is_available
 data_dir = "/data/CXR8/images"
 save_dir = "./savedModels"
 label_path = {'train':"./Train_Label_simple.csv", 'val':"./Val_Label_simple.csv", 'test':"Test_Label_simple.csv"}
-N_EPOCHS = 10
-MAX_PATIENCE = 3
+N_EPOCHS = 5
+MAX_PATIENCE = 2
 LEARNING_RATE = 3e-5
 LR_DECAY = 0.995
 DECAY_LR_EVERY_N_EPOCHS = 1
-EXPERIMENT_NAME = 'resnet50_flip'
+EXPERIMENT_NAME = 'se_resnet50'
 CXR8_PATH = '/data/CXR8'
 BATCH_SIZE = 24
 CXR8_MEAN = np.array([125.867, 125.867, 125.867])
@@ -312,51 +314,6 @@ class Experiment():
         os.system('convert +append {} {} {}'.format(loss_fname, auc_fname, loss_auc_fname))
 
 
-class ResNet50Modified(nn.Module):
-    def __init__(self, n_classes, logger=None):
-        super(ResNet50Modified, self).__init__()
-        self.n_class = n_classes
-        self.logger=logger
-
-        # Get features from resnet50
-        self.model_ft = models.resnet50(pretrained=True)
-
-        for param in self.model_ft.parameters():
-            param.requires_grad = False
-
-        self.transition = nn.Sequential(
-            nn.Conv2d(2048, 2048, kernel_size=3, padding=1, stride=1, bias=False),
-        )
-        self.globalPool = nn.Sequential(
-            nn.MaxPool2d(32)
-        )
-        self.prediction = nn.Sequential(
-            nn.Linear(2048, self.n_class),
-            nn.Sigmoid()
-        )
-
-    def log(self, msg):
-        if self.logger:
-            self.logger.debug(msg)
-
-    def forward(self, x):
-        x = self.model_ft.conv1(x)
-        x = self.model_ft.bn1(x)
-        x = self.model_ft.relu(x)
-        x = self.model_ft.maxpool(x)
-
-        x = self.model_ft.layer1(x)
-        x = self.model_ft.layer2(x)
-        x = self.model_ft.layer3(x)
-        x = self.model_ft.layer4(x)  # out: bs*2048*32*32
-
-        x = self.transition(x)  # out: bs*2048*32*32
-        x = self.globalPool(x)  # out: bs*2048*1*1
-        x = x.view(x.size(0), -1)  # out: bs*2048
-        x = self.prediction(x)
-        return x
-
-
 class CXRDataset(Dataset):
 
     def __init__(self, csv_file, root_dir, transform = None):
@@ -380,6 +337,7 @@ class CXRDataset(Dataset):
 
 
 def weighted_BCELoss(output, target, weights=None):
+    output = output.clamp(min = 1e-6, max = 1 - 1e-6)
     if weights is not None:
         assert len(weights) == 2
         loss = -weights[0] * (target * torch.log(output)) - weights[1] * ((1 - target) * torch.log(1 - output))
@@ -413,6 +371,45 @@ def get_logger(ch_log_level=logging.ERROR,
     return logger
 
 
+def get_weight(labels):
+    label_array = labels.numpy()
+    number, count = np.unique(label_array, return_counts=True)
+    frequency = dict(zip(number, count))
+    P = frequency.get(1, 0)
+    N = frequency.get(0, 0)
+
+    if P!=0 and N!=0:
+        BP = (P + N)/P
+        BN = (P + N)/N
+        weights = [BP, BN]
+        if use_gpu:
+            weights = torch.FloatTensor(weights).cuda()
+    else: 
+        weights = None 
+
+    return weights
+
+
+def get_predictions(model_output):
+    # Flatten and Get ArgMax to compute accuracy
+    val, idx = torch.max(model_output, dim=1)
+    return idx.data.cpu().view(-1).numpy()
+
+
+def get_accuracy(preds, targets):
+    correct = np.sum(preds == targets)
+    return correct / len(targets)
+
+
+def get_auc(output, target, average='macro'):
+    try:
+        auc = roc_auc_score(np.array(target), np.array(output), average=average)
+    except:
+        auc = -1
+
+    return auc
+
+
 def train(net, dataloader, criterion, optimizer, epoch=1):
     net.train()
     n_batches = len(dataloader)
@@ -426,8 +423,8 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
 
     for idx, (inputs, targets) in enumerate(dataloader):
         weights = get_weight(targets)
-        inputs = Variable(inputs.cuda())
-        targets = Variable(targets.cuda())
+        inputs = Variable(inputs.cuda(), volatile=False)
+        targets = Variable(targets.cuda(), volatile=False)
 
         ## Forward Pass
         output = net(inputs)
@@ -472,55 +469,10 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
     return mean_loss, mean_auc, classes_auc
 
 
-def get_weight(labels):
-    P, N, BP, BN = 0, 0, 0, 0
-    label_array = labels.numpy()
-    number, count = np.unique(label_array, return_counts=True)
-    frequency = dict(zip(number, count))
-    P = frequency[1]
-    N = frequency[0]
-
-    try:
-        BP = (P + N) / P
-    except ZeroDivisionError:
-        weights = [1, 1]
-
-    try:
-        BN = (P + N) / N
-    except ZeroDivisionError:
-        weights = [1, 1]
-
-    weights = [BP, BN]
-
-    if use_gpu:
-        weights = torch.FloatTensor(weights).cuda()
-
-    return weights
-
-
-def get_predictions(model_output):
-    # Flatten and Get ArgMax to compute accuracy
-    val, idx = torch.max(model_output, dim=1)
-    return idx.data.cpu().view(-1).numpy()
-
-
-def get_accuracy(preds, targets):
-    correct = np.sum(preds == targets)
-    return correct / len(targets)
-
-
-def get_auc(output, target, average='macro'):
-    try:
-        auc = roc_auc_score(np.array(target), np.array(output), average=average)
-    except:
-        auc = -1
-
-    return auc
-
-
 def validate(net, dataloader, criterion, epoch=1):
     net.eval()
     val_loss = 0
+    iterLoss = 0
     n_batches = len(dataloader)
     classes = dataloader.dataset.classes
     batch_size = dataloader.batch_size
@@ -531,15 +483,21 @@ def validate(net, dataloader, criterion, epoch=1):
     for idx, (inputs, targets) in enumerate(dataloader):
         weights = get_weight(targets)
         inputs = Variable(inputs.cuda(), volatile=True)
-        targets = Variable(targets.cuda())
+        targets = Variable(targets.cuda(), volatile=True)
         output = net(inputs)
         val_loss += criterion(output, targets, weights=weights).data[0]
+        iterLoss += criterion(output, targets, weights=weights).data[0]
 
         targets = targets.data.cpu().numpy()
         output = output.data.cpu().numpy()
         for i in range(output.shape[0]):
             total_output.append(output[i].tolist())
             total_target.append(targets[i].tolist())
+
+        if idx % 100 == 0 and idx != 0:
+            batch_auc = get_auc(total_output[-100 * batch_size:], total_target[-100 * batch_size:])
+            print('Validation {:.2f}% Loss: {:.4f} AUC: {:.4f}'.format(100 * idx / n_batches, iterLoss / (100 * batch_size), batch_auc))
+            iterLoss = 0
 
     mean_loss = val_loss / (n_batches * batch_size)
     mean_auc = get_auc(total_output, total_target)
@@ -565,9 +523,10 @@ def adjust_learning_rate(lr, decay, optimizer, cur_epoch, n_epochs):
         param_group['lr'] = new_lr
 
 
-def new_experiment():
+def experiment(exp_name, exp_path, exp_model, exp_type):
+
     normTransform = transforms.Normalize(CXR8_MEAN, CXR8_STD)
-    trainTransform = transforms.Compose([transforms.RandomHorizontalFlip(), transforms.ToTensor()])
+    trainTransform = transforms.Compose([transforms.ToTensor()])
     valTransform = transforms.Compose([transforms.ToTensor()])
 
     train_dataset = CXRDataset(label_path['train'], data_dir, transform=trainTransform)
@@ -577,16 +536,21 @@ def new_experiment():
 
     n_classes = len(train_dataset.classes)
     logger = get_logger(ch_log_level=logging.INFO, fh_log_level=logging.INFO)
-    model = ResNet50Modified(n_classes, logger).cuda()
+    model = exp_model(n_classes, logger).cuda()
     criterion = weighted_BCELoss
     optimizer = optim.Adam([{'params': model.transition.parameters()},
                             {'params': model.globalPool.parameters()},
                             {'params': model.prediction.parameters()}], lr=LEARNING_RATE)
 
-    exp = Experiment(EXPERIMENT_NAME, CXR8_PATH, logger)
+    exp = Experiment(exp_name, exp_path, logger)
 
-    # Create New Experiment
-    exp.init()
+    assert exp_type in ['new', 'resume']
+    if exp_type == 'new':
+        # Create New Experiment
+        exp.init()
+    elif exp_type == 'resume':
+        model, optimizer = exp.resume(model, optimizer)
+
 
     for epoch in range(exp.epoch, exp.epoch + N_EPOCHS):
         since = time.time()
@@ -622,7 +586,7 @@ def new_experiment():
         if (epoch - exp.best_val_auc_epoch) > MAX_PATIENCE:
             logger.info(("Early stopping at epoch %d since no "
                          + "better auc found since epoch %.3")
-                        % (epoch, exp.best_val_auc))
+                        % (epoch, exp.best_val_auc_epoch))
             break
 
         ### Adjust Lr ###
@@ -631,78 +595,10 @@ def new_experiment():
 
         exp.epoch += 1
 
-
-def resume_experiment():
-    normTransform = transforms.Normalize(CXR8_MEAN, CXR8_STD)
-    trainTransform = transforms.Compose([transforms.RandomHorizontalFlip(), transforms.ToTensor()])
-    valTransform = transforms.Compose([transforms.ToTensor()])
-
-    train_dataset = CXRDataset(label_path['train'], data_dir, transform=trainTransform)
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
-    val_dataset = CXRDataset(label_path['val'], data_dir, transform=valTransform)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
-
-    logger = get_logger(ch_log_level=logging.INFO, fh_log_level=logging.INFO)
-    n_classes = len(train_dataset.classes)
-    model = ResNet50Modified(n_classes, logger).cuda()
-    criterion = weighted_BCELoss
-    optimizer = optim.Adam([{'params': model.transition.parameters()},
-                            {'params': model.globalPool.parameters()},
-                            {'params': model.prediction.parameters()}], lr=LEARNING_RATE)
-
-    exp = Experiment(EXPERIMENT_NAME, CXR8_PATH, logger)
-
-    # Load saved weights and optimizer
-    model, optimizer = exp.resume(model, optimizer)
-
-    # Resume train and validate
-    for epoch in range(exp.epoch, exp.epoch + N_EPOCHS):
-        since = time.time()
-
-        ### Train ###
-        trn_loss, trn_auc, trn_classes_auc = train(model, train_loader, criterion, optimizer, epoch)
-        logger.info('Epoch {:d}: Train - Loss: {:.4f}\tAuc: {:.4f}'.format(epoch, trn_loss, trn_auc))
-        time_elapsed = time.time() - since
-        logger.info('Train Time {:.0f}m {:.0f}s'.format(
-            time_elapsed // 60, time_elapsed % 60))
-
-        ### Validate ###
-        val_loss, val_auc, val_classes_auc = validate(model, val_loader, criterion, epoch)
-        logger.info('Epoch {:d}: Validate - Loss: {:.4f}\tAuc: {:.4f}'.format(epoch, val_loss, val_auc))
-        time_elapsed = time.time() - since
-        logger.info('Total Time {:.0f}m {:.0f}s\n'.format(
-            time_elapsed // 60, time_elapsed % 60))
-
-        ### Save Metrics ###
-        exp.save_history('train', trn_loss, trn_auc)
-        exp.save_history('val', val_loss, val_auc)
-
-        ### Checkpoint ###
-        exp.save_weights(model, trn_loss, val_loss, trn_auc, val_auc, trn_classes_auc, val_classes_auc)
-        exp.save_optimizer(optimizer, val_loss)
-
-        ### Plot Online ###
-        exp.update_viz_loss_plot()
-        exp.update_viz_auc_plot()
-        exp.update_viz_summary_plot()
-
-        ## Early Stopping ##
-        if (epoch - exp.best_val_auc_epoch) > MAX_PATIENCE:
-            logger.info(("Early stopping at epoch %d since no "
-                         + "better auc found since epoch %.3")
-                        % (epoch, exp.best_val_auc))
-            break
-
-        ### Adjust Lr ###
-        adjust_learning_rate(LEARNING_RATE, LR_DECAY, optimizer,
-                             epoch, DECAY_LR_EVERY_N_EPOCHS)
-
-        exp.epoch += 1
 
 
 def main():
-    new_experiment()
-    #resume_experiment()
+    experiment(EXPERIMENT_NAME, CXR8_PATH, SE_ResNet50, 'new')
 
 
 if __name__=="__main__":
