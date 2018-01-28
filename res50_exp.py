@@ -22,6 +22,7 @@ import os
 import visdom
 import shutil
 import sys
+from tqdm import tqdm
 from pathlib import Path
 from sklearn.metrics import roc_auc_score
 from net_model import SE_ResNet50
@@ -421,7 +422,7 @@ def train(net, dataloader, criterion, optimizer, epoch=1):
     total_target = []
     total_output = []
 
-    for idx, (inputs, targets) in enumerate(dataloader):
+    for idx, (inputs, targets) in tqdm(enumerate(dataloader)):
         weights = get_weight(targets)
         inputs = Variable(inputs.cuda(), volatile=False)
         targets = Variable(targets.cuda(), volatile=False)
@@ -480,7 +481,7 @@ def validate(net, dataloader, criterion, epoch=1):
     total_target = []
     total_output = []
 
-    for idx, (inputs, targets) in enumerate(dataloader):
+    for idx, (inputs, targets) in tqdm(enumerate(dataloader)):
         weights = get_weight(targets)
         inputs = Variable(inputs.cuda(), volatile=True)
         targets = Variable(targets.cuda(), volatile=True)
@@ -598,7 +599,7 @@ def experiment(exp_name, exp_path, exp_model, exp_type):
 
 
 def main():
-    experiment(EXPERIMENT_NAME, CXR8_PATH, SE_ResNet50, 'new')
+    experiment(EXPERIMENT_NAME, CXR8_PATH, SE_ResNet50, 'resume')
 
 
 if __name__=="__main__":
