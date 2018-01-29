@@ -10,17 +10,20 @@ import hunspell
 import copy
 from difflib import SequenceMatcher
 from itertools import combinations
+from wordnet_sentence_similarity import symmetric_sentence_similarity
+from short_sentence_similarity import similarity
 
 
 spellchecker = hunspell.HunSpell('/usr/share/hunspell/en_US.dic', '/usr/share/hunspell/en_US.aff')
-matcher = SequenceMatcher(lambda x: x in ' ', ' ', ' ')
+matcher = SequenceMatcher(lambda x: x in ' ,.;?()<>0123456789+-*/=!@#$%^&', ' ', ' ')
 medical_wordlist = '/data/CXR8/NTUH/wordlist.txt'
 radiology_wordlist = '/data/CXR8/NTUH/radiology_word.txt'
-json_repo_list = ['/data/CXR8/NTUH/YFC_Reports', '/data/CXR8/NTUH/YCC_Reports']
+json_repo = {'yfc':'/data/CXR8/NTUH/YFC_Reports', 'ycc':'/data/CXR8/NTUH/YCC_Reports'}
 root = '/data/CXR8/NTUH/'
 report_xls = '/data/CXR8/NTUH/YFC_reports.xls'
-raw_output = '/data/CXR8/NTUH/sentences_YFC_raw.txt'
-final_output = '/data/CXR8/NTUH/sentences_YFC_70.txt'
+raw_output = '/data/CXR8/NTUH/YFC_raw.txt'
+corrected_output = '/data/CXR8/NTUH/YFC_corrected.txt'
+final_output = '/data/CXR8/NTUH/YFC_80_wordnet.txt'
 
 
 def _add_word_to_dictionary(spellchecker, wordlist):
@@ -86,19 +89,22 @@ def _correct_word(spellchecker, words, add_to_dict = None):
     return corrected, wrong
 
 
-def _get_json_list(repo_list):
+def _get_json_list(repos):
     json_list = []
-    if isinstance(repo_list, list):
-        for repo in repo_list:
+    if isinstance(repos, list):
+        for repo in repos:
             json_list += glob(os.path.join(repo, '*.json'))
-    elif isinstance(repo_list, str):
-        json_list += glob(os.path.join(repo_list, '*.json'))
+    elif isinstance(repos, str):
+        json_list += glob(os.path.join(repos, '*.json'))
+    elif isinstance(repos, dict):
+        for name, path in repos.items():
+            json_list += glob(os.path.join(path, '*.json'))
     else:
-        raise 'Wrong input type: {}'.format(type(repo_list))
+        raise 'Wrong input type: {}'.format(type(repos))
     return json_list
 
 
-def show_json(json_fn):
+def _show_json(json_fn):
     with open(json_fn, 'r', encoding='utf-8-sig') as fp:
         report_dict = json.load(fp)
         report_dict = json.dumps(report_dict, indent=4, ensure_ascii=False)
@@ -131,7 +137,7 @@ def _get_report_body(json_list, show=True):
                 continue
             else:
                 if show:
-                    show_json(jsf)
+                    _show_json(jsf)
                     print()
 
             for key, value in js_dict.items():
@@ -161,7 +167,7 @@ def _extract_sentences(report_list, show=True):
     sentence_list = []
     filter1 = re.compile(r'.*(?:EXAMINATION:\s*)(?P<exam>.*)(?:\r\n)(?:FINDINGS:\r\n)(?P<finding>.*$)')
     filter2 = re.compile(r'(\b[^\s].*?\.)')
-    filter3 = re.compile(r'(\b[^\s\d,.)>]+?.+?[.;)])')
+    filter3 = re.compile(r'(\b[^\s\d,.;\(\)<>\-\*\?]+?.+?[.;)\?]+?)')
 
     for report in report_list:
         if show:
@@ -220,30 +226,64 @@ def load_list(input_fn):
     return sentences
 
 
-def remove_similar_sentence(matcher, sentence_list, th):
+def grouping_sentence_method1(matcher, sentence_list, th):
     similar = set()
     for a, b in filter(similar.isdisjoint, combinations(sentence_list, 2)):
         matcher.set_seqs(a, b)
 
-        if matcher.ratio() > th:
+        if th < matcher.ratio() < 1:
             shorter = a if len(b) > len(a) else b
             similar.add(shorter)
-            print('" {} "/" {} ": {:.3f}'.format(a, b, matcher.ratio()))
-            print('Remove " {} "'.format(shorter))
+            print('"{}"\n"{}"\nSimilarity: {:.3f}'.format(a, b, matcher.ratio()))
+            print('\n==> Remove "{}"'.format(shorter))
             print()
-    unsimilar = list(set(sentence_list) - similar)
-    unsimilar.sort()
-    return unsimilar, similar
+    dissimilar = list(set(sentence_list) - similar)
+    dissimilar.sort()
+    return dissimilar, similar
+
+
+def grouping_sentence_method2(sentence_list, th):
+    similar = set()
+    for a, b in filter(similar.isdisjoint, combinations(sentence_list, 2)):
+        similarity = symmetric_sentence_similarity(a, b)
+
+        if th < similarity < 1:
+            shorter = a if len(b) > len(a) else b
+            similar.add(shorter)
+            print('"{}"\n"{}"\nSimilarity: {:.3f}'.format(a, b, similarity))
+            print('\n==> Remove "{}"'.format(shorter))
+            print()
+    dissimilar = list(set(sentence_list) - similar)
+    dissimilar.sort()
+    return dissimilar, similar
+
+
+def grouping_sentence_method3(sentence_list, th, info_content_norm):
+    similar = set()
+    for a, b in filter(similar.isdisjoint, combinations(sentence_list, 2)):
+        similar_ratio = similarity(a, b, info_content_norm)
+
+        if th < similar_ratio < 1:
+            shorter = a if len(b) > len(a) else b
+            similar.add(shorter)
+            print('"{}"\n"{}"\nSimilarity: {:.3f}'.format(a, b, similar_ratio))
+            print('\n==> Remove "{}"'.format(shorter))
+            print()
+    dissimilar = list(set(sentence_list) - similar)
+    dissimilar.sort()
+    return dissimilar, similar
 
 
 def main():
-    raw = get_raw_sentences(json_repo_list[0])
+    raw = get_raw_sentences(json_repo['yfc'])
     corrected = get_corrected_sentences(raw)
-    unsimilar, similar = remove_similar_sentence(matcher, corrected, 0.7)
+    #dissimilar, similar = remove_similar_sentence(matcher, corrected, 0.6)
+    dissimilar, similar = grouping_sentence_method3(corrected[:100], 0.6, True)
 
-    print('{} sentences are preserved.'.format(len(unsimilar)))
+    print('{} sentences are preserved.'.format(len(dissimilar)))
 
-    save_list(unsimilar, final_output)
+    save_list(corrected, corrected_output)
+    save_list(dissimilar, final_output)
 
 
 
