@@ -1,12 +1,10 @@
-#!/usr/bin/python3
-# encoding=utf-8
-# Inspired from source code from https://github.com/sujitpal/nltk-examples/tree/master/src/semantic
-# Python/NLTK implementation of algorithm to detect similarity between
-# short sentences described in the paper - "Sentence Similarity based
-# on Semantic Nets and Corpus Statistics" by Li, et al.
-# Results achieved are NOT identical to that reported in the paper, but
-# this is very likely due to the differences in the way the algorithm was
-# described in the paper and how I implemented it.
+# author : Sujit Pal
+
+# Note: this is a python3 updated version of http://sujitpal.blogspot.fr/2014/12/semantic-similarity-for-short-sentences.html
+# by mathieu Chrétien (mchretien.pro@mail.com)
+
+# contributor : Mathieu Chrétien
+
 import nltk
 from nltk.corpus import wordnet as wn
 from nltk.corpus import brown
@@ -45,8 +43,8 @@ def get_best_synset_pair(word_1, word_2):
         for synset_1 in synsets_1:
             for synset_2 in synsets_2:
                 sim = wn.path_similarity(synset_1, synset_2)
-                if sim is None:
-                    sim = 0.0
+                if sim == None:
+                    sim = 0
                 if sim > max_sim:
                     max_sim = sim
                     best_pair = synset_1, synset_2
@@ -152,12 +150,12 @@ def info_content(lookup_word):
         for sent in brown.sents():
             for word in sent:
                 word = word.lower()
-                if not word in brown_freqs:
+                if word not in brown_freqs:
                     brown_freqs[word] = 0
                 brown_freqs[word] = brown_freqs[word] + 1
                 N = N + 1
     lookup_word = lookup_word.lower()
-    n = 0 if not lookup_word in brown_freqs else brown_freqs[lookup_word]
+    n = 0 if lookup_word not in brown_freqs else brown_freqs[lookup_word]
     return 1.0 - (math.log(n + 1) / math.log(N + 1))
 
 
@@ -260,11 +258,6 @@ def similarity(sentence_1, sentence_2, info_content_norm):
     return DELTA * semantic_similarity(sentence_1, sentence_2, info_content_norm) + \
            (1.0 - DELTA) * word_order_similarity(sentence_1, sentence_2)
 
-
-######################### main / test ##########################
-
-# the results of the algorithm are largely dependent on the results of
-# the word similarities, so we should test this first...
 
 def main():
     sentences = ['A large mass in the right upper lung.',
