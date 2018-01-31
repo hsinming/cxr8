@@ -8,9 +8,11 @@ import json
 import re
 import hunspell
 import copy
+from pprint import pprint
 from difflib import SequenceMatcher
 from itertools import combinations
 from nltk import sent_tokenize
+from segtok.segmenter import split_multi
 from wordnet_sentence_similarity import symmetric_sentence_similarity
 from short_sentence_similarity import similarity
 from sentence import sentence_tokenizer
@@ -18,7 +20,6 @@ from sentence import sentence_tokenizer
 
 spellchecker = hunspell.HunSpell('/usr/share/hunspell/en_US.dic', '/usr/share/hunspell/en_US.aff')
 spellchecker.add_dic('/usr/share/hunspell/en_med_glut.dic')
-matcher = SequenceMatcher(lambda x: x in ' ,.;?()<>0123456789+-*/=!@#$%^&', ' ', ' ')
 medical_wordlist = '/data/CXR8/NTUH/wordlist.txt'
 radiology_wordlist = '/data/CXR8/NTUH/radiology_word.txt'
 json_repo = {'yfc': '/data/CXR8/NTUH/YFC_Reports',
@@ -29,42 +30,7 @@ root = '/data/CXR8/NTUH/'
 report_xls = '/data/CXR8/NTUH/YCC_reports.xls'
 raw_output = '/data/CXR8/NTUH/WJL_raw.txt'
 corrected_output = '/data/CXR8/NTUH/WJL_corrected.txt'
-final_output = '/data/CXR8/NTUH/WJL_80.txt'
-
-
-def _split_into_sentences(text):
-    caps = "([A-Z])"
-    prefixes = "(Mr|St|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|Mt|Jr)[.]"
-    suffixes = "(Inc|Ltd|Jr|Sr|Co)"
-    starters = "(Mr|Mrs|Ms|Dr|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)"
-    acronyms = "([A-Z][.][A-Z][.](?:[A-Z][.])?)"
-    websites = "[.](com|net|org|io|gov|me|edu)"
-
-    text = " " + text + "  "
-    text = text.replace("\n"," ")
-    text = re.sub(prefixes,"\\1<prd>",text)
-    text = re.sub(websites,"<prd>\\1",text)
-    if "Ph.D" in text: text = text.replace("Ph.D.","Ph<prd>D<prd>")
-    text = re.sub("\s" + caps + "[.] "," \\1<prd> ",text)
-    text = re.sub(acronyms+" "+starters,"\\1<stop> \\2",text)
-    text = re.sub(caps + "[.]" + caps + "[.]" + caps + "[.]","\\1<prd>\\2<prd>\\3<prd>",text)
-    text = re.sub(caps + "[.]" + caps + "[.]","\\1<prd>\\2<prd>",text)
-    text = re.sub(" "+suffixes+"[.] "+starters," \\1<stop> \\2",text)
-    text = re.sub(" "+suffixes+"[.]"," \\1<prd>",text)
-    text = re.sub(" " + caps + "[.]"," \\1<prd>",text)
-    if "”" in text: text = text.replace(".”","”.")
-    if "\"" in text: text = text.replace(".\"","\".")
-    if "!" in text: text = text.replace("!\"","\"!")
-    if "?" in text: text = text.replace("?\"","\"?")
-    if "..." in text: text = text.replace("...", "<prd><prd><prd>")
-    text = text.replace(".",".<stop>")
-    text = text.replace("?","?<stop>")
-    text = text.replace("!","!<stop>")
-    text = text.replace("<prd>",".")
-    sentences = text.split("<stop>")
-    sentences = sentences[:-1]
-    sentences = [s.strip() for s in sentences]
-    return sentences
+final_output = '/data/CXR8/NTUH/WJL_60_semantic.txt'
 
 
 def _add_word_to_dictionary(spellchecker, wordlist_path):
@@ -91,9 +57,8 @@ def _get_json_list(repos):
 
 def _show_json(json_fn):
     with open(json_fn, 'r', encoding='utf-8-sig') as fp:
-        report_dict = json.load(fp)
-        report_dict = json.dumps(report_dict, indent=4, ensure_ascii=False)
-        print(report_dict)
+        report = json.load(fp)
+        pprint(report)
 
 
 def _report_pool(json_list):
@@ -132,36 +97,13 @@ def _get_report_body(json_list, show=False):
                     except:
                         continue
                 else:
-                    print('{} contains no dictionary.'.format(key))
+                    if show:
+                        print('{} contains no dictionary.'.format(key))
+                        _show_json(jsf)
                     continue
 
 
     return reportBody_list
-
-
-def _extract_sentences(report_list, show=False):
-    sentence_list = []
-    filter = re.compile(r'[a-zA-Z]+.+?[^\d][.;]')
-
-    for report in report_list:
-        if show:
-            print('Original report: {}'.format(repr(report)))
-        for line in report.splitlines():
-            line = line.strip()
-
-            if show:
-                print('After splitline and strip: {}'.format(repr(line)))
-
-            match = filter.findall(line)
-            if match:
-                for m in match:
-                    if len(re.split(r'\s+', m.strip())) > 1:
-                        sentence_list.append(m.strip())
-
-    sentence_list = list(dict.fromkeys(sentence_list))
-    sentence_list.sort()
-
-    return sentence_list
 
 
 def correct_typo(spellchecker, input):
@@ -237,11 +179,55 @@ def sentence_splitter(report, tokenizer):
     return sentence_list
 
 
+def sentence_splitter2(report):
+    is_list = isinstance(report, list)
+    is_str = isinstance(report, str)
+    sentence_list = []
+
+    if is_list:
+        for each in report:
+            sentence_list += list(split_multi(each))
+    if is_str:
+        sentence_list += list(split_multi(report))
+
+    sentence_list = list(dict.fromkeys(sentence_list))
+    sentence_list.sort()
+
+    return sentence_list
+
+
+def sentence_splitter3(report_list, show=False):
+    sentence_list = []
+    filter2 = re.compile(r'[a-zA-Z]+.*?(?<!\d)(?<!Dr)(?<!Bil)(?<!bil)(?<!esp)(?<!Esp)(?<!susp)(?<!Susp)[.,;:]')
+    filter = re.compile(r'(?:[Cc]hest.*?(?:shows|show|showed))?(.*?(?<!\d)(?<!Dr)(?<!Bil)(?<!bil)(?<!esp)(?<!Esp)(?<!susp)(?<!Susp)[.,;:])')
+
+    for report in report_list:
+        if show:
+            print('Original report: {}'.format(repr(report)))
+        for line in report.splitlines():
+            line = line.strip()
+
+            if show:
+                print('After splitline and strip: {}'.format(repr(line)))
+
+            match = filter.findall(line)
+            if match:
+                for m in match:
+                    if len(re.split(r'\s+', m.strip())) > 1:
+                        sentence_list.append(m.strip())
+
+    sentence_list = list(dict.fromkeys(sentence_list))
+    sentence_list.sort()
+
+    return sentence_list
+
+
 def get_raw_sentences(json_repo):
     json_list = _get_json_list(json_repo)
     report_list = _get_report_body(json_list)
-    #raw_sentences = _extract_sentences(report_list)
-    raw_sentences = sentence_splitter(report_list, sentence_tokenizer())
+    raw_sentences = sentence_splitter3(report_list)     #split by regex
+    #raw_sentences = sentence_splitter(report_list, sentence_tokenizer())   #split by PunktSentenceTokenizer
+    #raw_sentences = sentence_splitter2(report_list)  #split with segtok
     return raw_sentences
 
 
@@ -273,7 +259,8 @@ def save_to_excel(input, output, overwrite=True):
         print('Saving {} succeeded.'.format(output))
 
 
-def grouping_sentence_method1(matcher, sentence_list, th, keep):
+def rank_sentence_method1(sentence_list, th, keep):
+    matcher = SequenceMatcher(lambda x: x in ' ,.;?()<>0123456789+-*/=!@#$%^&', ' ', ' ')
     assert keep in ['shorter', 'longer']
     similar = set()
     for a, b in filter(similar.isdisjoint, combinations(sentence_list, 2)):
@@ -293,7 +280,7 @@ def grouping_sentence_method1(matcher, sentence_list, th, keep):
     return dissimilar
 
 
-def grouping_sentence_method2(sentence_list, th, keep):
+def rank_sentence_method2(sentence_list, th, keep):
     assert keep in ['shorter', 'longer']
     similar = set()
     for a, b in filter(similar.isdisjoint, combinations(sentence_list, 2)):
@@ -313,7 +300,7 @@ def grouping_sentence_method2(sentence_list, th, keep):
     return dissimilar
 
 
-def grouping_sentence_method3(sentence_list, th, keep, info_content_norm):
+def rank_sentence_method3(sentence_list, th, keep, info_content_norm=True):
     assert keep in ['shorter', 'longer']
     similar = set()
     for a, b in filter(similar.isdisjoint, combinations(sentence_list, 2)):
@@ -335,14 +322,15 @@ def grouping_sentence_method3(sentence_list, th, keep, info_content_norm):
 
 def main():
     raw_sentences = get_raw_sentences(json_repo['wjl'])
-    corrected_sentences = correct_typo(spellchecker, raw_sentences)
+    #corrected_sentences = correct_typo(spellchecker, raw_sentences)
+    corrected_sentences = raw_sentences
 
-    #dissimilar = grouping_sentence_method1(matcher, corrected_sentences, 0.6, 'shorter')
-    dissimilar = grouping_sentence_method3(corrected_sentences, 0.8, 'shorter', True)
+    #dissimilar = rank_sentence_method1(corrected_sentences, 0.6, 'shorter')
+    dissimilar = rank_sentence_method3(corrected_sentences, 0.6, 'shorter', True)
 
     print('{} sentences are preserved.'.format(len(dissimilar)))
-
-    save_list(corrected_sentences, corrected_output)
+    save_list(raw_sentences, raw_output)
+    #save_list(corrected_sentences, corrected_output)
     save_list(dissimilar, final_output)
     return
 
