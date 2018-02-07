@@ -12,12 +12,12 @@ from pprint import pprint
 from difflib import SequenceMatcher
 from itertools import combinations
 from nltk import sent_tokenize
-from segtok.segmenter import split_multi
-from wordnet_sentence_similarity import symmetric_sentence_similarity
-from short_sentence_similarity import similarity
-from sentence import sentence_tokenizer
+from collections import defaultdict
+from multiprocessing import Pool, cpu_count
+from operator import itemgetter
 
 
+matcher = SequenceMatcher(lambda x: x in ' ,.;?()<>0123456789+-*/=!@#$%^&', ' ', ' ')
 spellchecker = hunspell.HunSpell('/usr/share/hunspell/en_US.dic', '/usr/share/hunspell/en_US.aff')
 spellchecker.add_dic('/usr/share/hunspell/en_med_glut.dic')
 medical_wordlist = '/data/CXR8/NTUH/wordlist.txt'
@@ -26,11 +26,142 @@ json_repo = {'yfc': '/data/CXR8/NTUH/YFC_Reports',
              'ycc': '/data/CXR8/NTUH/YCC_Reports',
              'jyc': '/data/CXR8/NTUH/JYC_Reports',
              'wjl': '/data/CXR8/NTUH/WJL_Reports'}
-root = '/data/CXR8/NTUH/'
-report_xls = '/data/CXR8/NTUH/YCC_reports.xls'
-raw_output = '/data/CXR8/NTUH/WJL_raw.txt'
-corrected_output = '/data/CXR8/NTUH/WJL_corrected.txt'
-final_output = '/data/CXR8/NTUH/WJL_60_semantic.txt'
+
+
+class Report(object):
+    json_repo = {'yfc': '/data/CXR8/NTUH/YFC_Reports',
+                 'ycc': '/data/CXR8/NTUH/YCC_Reports',
+                 'jyc': '/data/CXR8/NTUH/JYC_Reports',
+                 'wjl': '/data/CXR8/NTUH/WJL_Reports'}
+    def __init__(self, name: str, root_path = '/data/CXR8/NTUH'):
+        self.name = name.upper()
+        self.root_path = root_path
+        self.excel_path = os.path.join(root_path, '{}.xls'.format(name.upper()))
+        self.raw_sent_path = os.path.join(root_path, '{}_raw.txt'.format(name.upper()))
+        self.corrected_sent_path = os.path.join(root_path, '{}_corrected.txt'.format(name.upper()))
+        self.abstract_sent_path = os.path.join(root_path, '{}_abs.txt'.format(name.upper()))
+        self.json_repo = self.__class__.json_repo.get(name.lower(), '')
+        self.json_files = self._get_json_list()
+        self.reports = self._get_report_body()
+        self.raw_sentences = self._split_into_sentence()
+        self._save_list(self.raw_sentences, self.raw_sent_path)
+        corrected_sentences = []
+        for s in self.raw_sentences:
+            corrected_sentences.append(self._correct_typo(s))
+        self.corrected_sentences = corrected_sentences
+        self._save_list(self.corrected_sentences, self.corrected_sent_path)
+
+    def __str__(self):
+        return "{name}'s reports".format(self.name)
+
+    def __repr__(self):
+        self.__str__()
+
+    def _get_json_list(self) -> list:
+        json_list = []
+        json_list += glob(os.path.join(self.json_repo, '*.json'))
+        print('There are {} reports loaded.'.format(len(json_list)))
+        return json_list
+
+    def _get_report_body(self) -> list:
+        reportBody_list = []
+        for jsf in self.json_files:
+            with open(jsf, 'r', encoding='utf-8-sig') as fp:
+                try:
+                    whole_report = json.load(fp)
+                except:
+                    continue
+
+                for key, value in whole_report.items():
+                    if isinstance(value, dict):
+                        try:
+                            raw_report = value.get('ReportBody', '')
+                        except:
+                            continue
+                        report = re.split(r'\r\n', raw_report)
+                        for r in report:
+                            reportBody_list.append(r.strip())
+                    else:
+                        continue
+
+        return reportBody_list
+
+    def _split_into_sentence(self) -> list:
+        """
+        A sentence tokenizer by regular expression.
+        Return a list of sentences, each of which is a string.
+        """
+        sentence_list = []
+        filter = re.compile(
+            r'(?:(?:Chest)?(?:PA|AP|PA/AP|AP/PA)?(?:CXR)?.*?(?:shows|show|showed)?\s*:?\s*)?([a-zA-Z]+.*?(?<!\d)(?<!Dr)(?<!DR)(?<!Bil)(?<!bil)(?<!esp)(?<!Esp)(?<!susp)(?<!Susp))[.,;:]')
+
+        for report in self.reports:
+            for line in report.splitlines():
+                line = line.strip()
+                match = filter.findall(line)
+                if match:
+                    sentence_list += match
+        sentence_list = list(set(sentence_list))
+        sentence_list.sort()
+        print('These reports contain {} different sentences.'.format(len(sentence_list)))
+        return sentence_list
+
+    def _correct_typo(self, input_str: str) -> str:
+        """
+        Hunspell spell checker for string of words or a sentence.
+        :param input: a string
+        :return: a string
+        """
+        _add_word_to_dictionary(spellchecker, radiology_wordlist)
+        enc = spellchecker.get_dic_encoding()
+
+        is_single_word = bool(len(re.split(r'\s+', input_str)) == 1)
+        is_sentence = not is_single_word
+
+        to_check = copy.deepcopy(input_str)
+
+        if is_single_word:
+            if to_check.isalpha() and (not to_check.isupper()):
+                try:
+                    ok = spellchecker.spell(to_check)  # False if it is a typo.
+                except UnicodeEncodeError:  # Not in a supported encoding.
+                    return to_check
+
+                if not ok:
+                    suggestions = spellchecker.suggest(to_check)
+                    if suggestions:
+                        try:
+                            best = suggestions[0].decode(enc)
+                        except:
+                            best = suggestions[0]
+                        corrected = best
+                    else:  # Hunspell has no suggestion, so send back the original word.
+                        corrected = to_check
+                else:  # Already correct.
+                    corrected = to_check
+            else:  # Abbreviation or numbers
+                corrected = to_check
+            return corrected
+        elif is_sentence:
+            corrected_sentence = []
+            words = re.split(r'\s+', to_check)
+            for word in words:
+                corrected_word = correct_typo(word)
+                corrected_sentence.append(corrected_word)
+            corrected_sentence = " ".join(corrected_sentence)
+            return corrected_sentence
+
+    def _save_list(self, list_to_save: list, output_fn: str):
+        to_write = '\n'.join(list_to_save)
+        with open(output_fn, 'wt') as fp:
+            fp.write(to_write)
+
+    def _load_list(self, input_fn: str):
+        sentences = []
+        with open(input_fn, 'rt') as fp:
+            for line in fp.readlines():
+                sentences.append(line.strip())
+        return sentences
 
 
 def _add_word_to_dictionary(spellchecker, wordlist_path):
@@ -40,7 +171,7 @@ def _add_word_to_dictionary(spellchecker, wordlist_path):
                 spellchecker.add(word)
 
 
-def _get_json_list(repos):
+def _get_json_list(repos: (str, list, dict)) -> list:
     json_list = []
     if isinstance(repos, list):
         for repo in repos:
@@ -77,7 +208,7 @@ def _report_pool(json_list):
     return reports
 
 
-def _get_report_body(json_list, show=False):
+def _get_report_body(json_list: list, show=False) -> list:
     reportBody_list = []
     for jsf in json_list:
         with open(jsf, 'r', encoding='utf-8-sig') as fp:
@@ -93,9 +224,12 @@ def _get_report_body(json_list, show=False):
             for key, value in js_dict.items():
                 if isinstance(value, dict):
                     try:
-                        reportBody_list.append(value.get('ReportBody', ''))
+                        raw_report = value.get('ReportBody', '')
                     except:
                         continue
+                    report = re.split(r'\r\n', raw_report)
+                    for r in report:
+                        reportBody_list.append(r.strip())
                 else:
                     if show:
                         print('{} contains no dictionary.'.format(key))
@@ -106,28 +240,26 @@ def _get_report_body(json_list, show=False):
     return reportBody_list
 
 
-def correct_typo(spellchecker, input):
-    assert isinstance(input, (str, list))
+def correct_typo(input_str: str) -> str:
+    """
+    Hunspell spell checker for string of words or a sentence.
+    :param input: a string
+    :return: a string
+    """
     _add_word_to_dictionary(spellchecker, radiology_wordlist)
     enc = spellchecker.get_dic_encoding()
-    output = []
-    is_list = isinstance(input, list)
-    is_string = isinstance(input, str)
-    if is_string:
-        is_single_word = not bool(re.search(r'\s+', input))   # not split by space
-    if is_list:
-        is_single_word = False
-    is_sentence = bool(is_string and not is_single_word)
 
-    to_check = copy.deepcopy(input)
+    is_single_word = bool(len(re.split(r'\s+', input_str))==1)
+    is_sentence = not is_single_word
+
+    to_check = copy.deepcopy(input_str)
 
     if is_single_word:
-        if to_check.isalpha() and not to_check.isupper():
+        if to_check.isalpha() and (not to_check.isupper()):
             try:
                 ok = spellchecker.spell(to_check)    # False if it is a typo.
             except UnicodeEncodeError:    # Not in a supported encoding.
-                output.append(to_check)
-                return output
+                return to_check
 
             if not ok:
                 suggestions = spellchecker.suggest(to_check)
@@ -143,78 +275,46 @@ def correct_typo(spellchecker, input):
                 corrected = to_check
         else:  # Abbreviation or numbers
             corrected = to_check
-        output.append(corrected)
-    elif is_sentence:  # a sentence
+        return corrected
+    elif is_sentence:
         corrected_sentence = []
         words = re.split(r'\s+', to_check)
         for word in words:
-            corrected_word = correct_typo(spellchecker, word)[0]
+            corrected_word = correct_typo(word)
             corrected_sentence.append(corrected_word)
-        corrected_sentence_string = " ".join(corrected_sentence)
-        output.append(corrected_sentence_string)
-    elif is_list:   # a list of sentences
-        for sentence in to_check:
-            corrected_sentence = correct_typo(spellchecker, sentence)  # a list has a single sentence
-            output += corrected_sentence
+        corrected_sentence = " ".join(corrected_sentence)
+        return corrected_sentence
+
+
+def sentence_splitter1(report: str, tokenizer) -> list:
+    """
+    A sentence tokenizer from Punkt Sentence tokenizer
+    Return a list of sentence strings.
+    """
+    output = []
+    sentences = tokenizer.tokenize(report)
+    output += [s.strip() for s in sentences]
+    output.sort()
 
     return output
 
 
-def sentence_splitter(report, tokenizer):
-    is_list = isinstance(report, list)
-    is_str = isinstance(report, str)
+def sentence_splitter2(report_list: list, show=False) -> list:
+    """
+    A sentence tokenizer by regular expression.
+    Return a list of sentences (string).
+    """
     sentence_list = []
-
-    if is_list:
-        for each in report:
-            sentence_list += sentence_splitter(each, tokenizer)
-    if is_str :
-        sentences = tokenizer.tokenize(report)
-        for s in sentences:
-            if len(re.split(r'\s+', s.strip())) > 1:
-                sentence_list.append(s.strip())
-    sentence_list = list(dict.fromkeys(sentence_list))
-    sentence_list.sort()
-
-    return sentence_list
-
-
-def sentence_splitter2(report):
-    is_list = isinstance(report, list)
-    is_str = isinstance(report, str)
-    sentence_list = []
-
-    if is_list:
-        for each in report:
-            sentence_list += list(split_multi(each))
-    if is_str:
-        sentence_list += list(split_multi(report))
-
-    sentence_list = list(dict.fromkeys(sentence_list))
-    sentence_list.sort()
-
-    return sentence_list
-
-
-def sentence_splitter3(report_list, show=False):
-    sentence_list = []
-    filter2 = re.compile(r'[a-zA-Z]+.*?(?<!\d)(?<!Dr)(?<!Bil)(?<!bil)(?<!esp)(?<!Esp)(?<!susp)(?<!Susp)[.,;:]')
-    filter = re.compile(r'(?:[Cc]hest.*?(?:shows|show|showed))?(.*?(?<!\d)(?<!Dr)(?<!Bil)(?<!bil)(?<!esp)(?<!Esp)(?<!susp)(?<!Susp)[.,;:])')
+    filter = re.compile(r'(?:[Cc]hest.*?(?:shows|show|showed)\s*:?\s+)?([a-zA-Z]+.*?(?<!\d)(?<!Dr)(?<!DR)(?<!Bil)(?<!bil)(?<!esp)(?<!Esp)(?<!susp)(?<!Susp))[.,;:]')
 
     for report in report_list:
         if show:
             print('Original report: {}'.format(repr(report)))
         for line in report.splitlines():
             line = line.strip()
-
-            if show:
-                print('After splitline and strip: {}'.format(repr(line)))
-
             match = filter.findall(line)
             if match:
-                for m in match:
-                    if len(re.split(r'\s+', m.strip())) > 1:
-                        sentence_list.append(m.strip())
+                sentence_list += [m.strip() for m in match]
 
     sentence_list = list(dict.fromkeys(sentence_list))
     sentence_list.sort()
@@ -222,12 +322,25 @@ def sentence_splitter3(report_list, show=False):
     return sentence_list
 
 
-def get_raw_sentences(json_repo):
+def sentence_splitter3(reports: list) -> list:
+    """
+    A sentence tokenizer from NLTK
+    """
+    output = []
+    for report in reports:
+        sentences = sent_tokenize(report)
+        output += [s.strip() for s in sentences]
+    output = list(set(output))
+    output.sort()
+    return output
+
+
+def get_raw_sentences(json_repo: (str, list, dict)) -> list:
+    #punkt_tokenizer = sentence_tokenizer()
+    #punkt_tokenizer._params.abbrev_types.add(('dr','yfc'))
     json_list = _get_json_list(json_repo)
     report_list = _get_report_body(json_list)
-    raw_sentences = sentence_splitter3(report_list)     #split by regex
-    #raw_sentences = sentence_splitter(report_list, sentence_tokenizer())   #split by PunktSentenceTokenizer
-    #raw_sentences = sentence_splitter2(report_list)  #split with segtok
+    raw_sentences = sentence_splitter2(report_list)
     return raw_sentences
 
 
@@ -259,79 +372,102 @@ def save_to_excel(input, output, overwrite=True):
         print('Saving {} succeeded.'.format(output))
 
 
-def rank_sentence_method1(sentence_list, th, keep):
+def remove_similar_sentence(sentence_list: list, th: float) -> tuple:
     matcher = SequenceMatcher(lambda x: x in ' ,.;?()<>0123456789+-*/=!@#$%^&', ' ', ' ')
-    assert keep in ['shorter', 'longer']
     similar = set()
     for a, b in filter(similar.isdisjoint, combinations(sentence_list, 2)):
         matcher.set_seqs(a, b)
-
         if th < matcher.ratio() < 1:
-            shorter = a if len(b) > len(a) else b
-            longer = a if len(a) > len(b) else b
-            if keep == 'shorter': remove = longer
-            if keep == 'longer': remove = shorter
-            similar.add(remove)
+            similar.update([a, b])
             print('"{}"\n"{}"\nSimilarity: {:.3f}'.format(a, b, matcher.ratio()))
-            print('==> Remove "{}"'.format(remove))
             print()
     dissimilar = list(set(sentence_list) - similar)
     dissimilar.sort()
-    return dissimilar
+    similar = list(set(similar))
+    similar.sort()
+    return dissimilar, similar
 
 
-def rank_sentence_method2(sentence_list, th, keep):
-    assert keep in ['shorter', 'longer']
-    similar = set()
-    for a, b in filter(similar.isdisjoint, combinations(sentence_list, 2)):
-        similarity = symmetric_sentence_similarity(a, b)
+def match_sentence(sentence_list: list, th: float) -> dict:
+    matcher = SequenceMatcher(lambda x: x in ' ,.;?()<>0123456789+-*/=!@#$%^&', ' ', ' ')
+    matchList = []
+    for a in sentence_list:
+        matchDict = defaultdict(list)   # record similarity mapping of each sentence
+        for b in sentence_list:
+            matcher.set_seqs(a.lower(), b.lower())
+            similarity_ratio = matcher.ratio()
 
-        if th < similarity < 1:
-            shorter = a if len(b) > len(a) else b
-            longer = a if len(a) > len(b) else b
-            if keep == 'shorter': remove = longer
-            if keep == 'longer': remove = shorter
-            similar.add(remove)
-            print('"{}"\n"{}"\nSimilarity: {:.3f}'.format(a, b, similarity))
-            print('==> Remove "{}"'.format(remove))
-            print()
-    dissimilar = list(set(sentence_list) - similar)
-    dissimilar.sort()
-    return dissimilar
+            if th < similarity_ratio < 1:   # exclude a = b
+                matchDict['sent_a'] = a
+                matchDict['sent_b'].append({b:similarity_ratio})
+
+                print('"{}"\n"{}"\nSimilarity: {:.3f}'.format(a, b, similarity_ratio))
+                print()
+
+        if len(matchDict['sent_b']) > 0:
+            matchList.append(matchDict)
+    return matchList
 
 
-def rank_sentence_method3(sentence_list, th, keep, info_content_norm=True):
-    assert keep in ['shorter', 'longer']
-    similar = set()
-    for a, b in filter(similar.isdisjoint, combinations(sentence_list, 2)):
-        similar_ratio = similarity(a, b, info_content_norm)
+def _mean_similarity(a: str, sentences: list):
+    number = len(sentences)
+    sentences_set = set(sentences)
+    sent_a_set = set()
+    sent_a_set.add(a)
+    sent_b_set = sentences_set - sent_a_set
+    sum = 0.0
+    matcher.set_seq1(a)
+    for b in sent_b_set:
+        matcher.set_seq2(b)
+        sum += matcher.ratio()
+    avg = sum / (number - 1)
+    return (a, avg)
 
-        if th < similar_ratio < 1:
-            shorter = a if len(re.split(r'\W+',b)) > len(re.split(r'\W+',a)) else b
-            longer = a if len(re.split(r'\W+',b)) < len(re.split(r'\W+',a)) else b
-            if keep == 'shorter': remove = longer
-            if keep == 'longer': remove = shorter
-            similar.add(remove)
-            print('"{}"\n"{}"\nSimilarity: {:.3f}'.format(a, b, similar_ratio))
-            print('==> Remove "{}"'.format(remove))
-            print()
-    dissimilar = list(set(sentence_list) - similar)
-    dissimilar.sort()
-    return dissimilar
+
+def find_common_sentence(sentences: list, k: int) -> dict:
+    pool = Pool(cpu_count())
+    arg = [(s, sentences) for s in sentences]
+    mean = pool.starmap_async(_mean_similarity, arg)
+    pool.close()
+    pool.join()
+    mean = sorted(mean.get(), key=itemgetter(1), reverse=True)
+    result = dict(mean[i] for i in range(k))
+    return result
+
 
 
 def main():
-    raw_sentences = get_raw_sentences(json_repo['wjl'])
-    #corrected_sentences = correct_typo(spellchecker, raw_sentences)
-    corrected_sentences = raw_sentences
+    name = 'JYC'
+    th = 0.9
+    number = 5
+    start = 4
 
-    #dissimilar = rank_sentence_method1(corrected_sentences, 0.6, 'shorter')
-    dissimilar = rank_sentence_method3(corrected_sentences, 0.6, 'shorter', True)
+    for i in range(start, start + number):
+        try:
+            with open('/data/CXR8/NTUH/{}_CommonSent_{}.json'.format(name, i-1), 'rt', encoding='utf-8-sig') as fp:
+                sentences = json.load(fp)
+        except:
+            sentences = Report(name.lower()).raw_sentences
 
-    print('{} sentences are preserved.'.format(len(dissimilar)))
-    save_list(raw_sentences, raw_output)
-    #save_list(corrected_sentences, corrected_output)
-    save_list(dissimilar, final_output)
+        sentences = list(set(sentences))
+        matchList = match_sentence(sentences, th)
+        count_matchList = sorted([(d['sent_a'], len(d['sent_b'])) for d in matchList],
+                                 key=lambda x: x[1], reverse=True)
+        # exclude the sentence of only single match
+        common_sent = sorted([s for (s ,c) in count_matchList if c > 1])
+
+        with open('/data/CXR8/NTUH/{}_MatchList_{}.json'.format(name, i), 'wt') as fp:
+            json.dump(matchList, fp, indent=4, sort_keys=True)
+        with open('/data/CXR8/NTUH/{}_MatchCount_{}.json'.format(name, i), 'wt') as fp:
+            json.dump(count_matchList, fp, indent=4, sort_keys=True)
+        with open('/data/CXR8/NTUH/{}_CommonSent_{}.json'.format(name, i), 'wt') as fp:
+            json.dump(common_sent, fp, indent=4, sort_keys=True)
+
+
+    pprint(count_matchList[:50])
+    print('There are {} common sentence.'.format(len(common_sent)))
+
+
     return
 
 
