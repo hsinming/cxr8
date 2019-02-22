@@ -42,8 +42,7 @@ def get_best_synset_pair(word_1, word_2):
         best_pair = None, None
         for synset_1 in synsets_1:
             for synset_2 in synsets_2:
-                #sim = wn.path_similarity(synset_1, synset_2)
-                sim = wn.wup_similarity(synset_1, synset_2)
+                sim = wn.path_similarity(synset_1, synset_2)
                 if sim == None:
                     sim = 0
                 if sim > max_sim:

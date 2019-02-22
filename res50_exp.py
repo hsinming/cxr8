@@ -351,7 +351,7 @@ def get_logger(ch_log_level=logging.ERROR,
                fh_log_level=logging.INFO):
     logging.shutdown()
     imp.reload(logging)
-    logger = logging.getLogger("resnet50")
+    logger = logging.getLogger(EXPERIMENT_NAME)
     logger.setLevel(logging.DEBUG)
 
     # Console Handler
@@ -363,7 +363,7 @@ def get_logger(ch_log_level=logging.ERROR,
 
     # File Handler
     if fh_log_level:
-        fh = logging.FileHandler('resnet50.log')
+        fh = logging.FileHandler('{}.log'.format(EXPERIMENT_NAME))
         fh.setLevel(fh_log_level)
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
         fh.setFormatter(formatter)
@@ -375,6 +375,7 @@ def get_logger(ch_log_level=logging.ERROR,
 def get_weight(labels):
     label_array = labels.numpy()
     number, count = np.unique(label_array, return_counts=True)
+    # count the frequency of 0's and 1's in label
     frequency = dict(zip(number, count))
     P = frequency.get(1, 0)
     N = frequency.get(0, 0)
@@ -525,7 +526,7 @@ def adjust_learning_rate(lr, decay, optimizer, cur_epoch, n_epochs):
 
 
 def experiment(exp_name, exp_path, exp_model, exp_type):
-
+    # To-Do: compute CXR8's mean and std
     normTransform = transforms.Normalize(CXR8_MEAN, CXR8_STD)
     trainTransform = transforms.Compose([transforms.ToTensor()])
     valTransform = transforms.Compose([transforms.ToTensor()])
@@ -567,8 +568,7 @@ def experiment(exp_name, exp_path, exp_model, exp_type):
         val_loss, val_auc, val_classes_auc = validate(model, val_loader, criterion, epoch)
         logger.info('Epoch {:d}: Validate - Loss: {:.4f}\tAuc: {:.4f}'.format(epoch, val_loss, val_auc))
         time_elapsed = time.time() - since
-        logger.info('Total Time {:.0f}m {:.0f}s\n'.format(
-            time_elapsed // 60, time_elapsed % 60))
+        logger.info('Total Time {:.0f}m {:.0f}s\n'.format(time_elapsed // 60, time_elapsed % 60))
 
         ### Save Metrics ###
         exp.save_history('train', trn_loss, trn_auc)

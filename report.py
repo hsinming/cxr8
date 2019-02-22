@@ -15,6 +15,7 @@ from nltk import sent_tokenize
 from collections import defaultdict
 from multiprocessing import Pool, cpu_count
 from operator import itemgetter
+import spacy
 
 
 matcher = SequenceMatcher(lambda x: x in ' ,.;?()<>0123456789+-*/=!@#$%^&', ' ', ' ')
@@ -25,24 +26,27 @@ radiology_wordlist = '/data/CXR8/NTUH/radiology_word.txt'
 json_repo = {'yfc': '/data/CXR8/NTUH/YFC_Reports',
              'ycc': '/data/CXR8/NTUH/YCC_Reports',
              'jyc': '/data/CXR8/NTUH/JYC_Reports',
-             'wjl': '/data/CXR8/NTUH/WJL_Reports'}
+             'wjl': '/data/CXR8/NTUH/WJL_Reports',
+             'many': '/data/CXR8/NTUH/MANY_Reports'}
 
 
 class Report(object):
     json_repo = {'yfc': '/data/CXR8/NTUH/YFC_Reports',
                  'ycc': '/data/CXR8/NTUH/YCC_Reports',
                  'jyc': '/data/CXR8/NTUH/JYC_Reports',
-                 'wjl': '/data/CXR8/NTUH/WJL_Reports'}
-    def __init__(self, name: str, root_path = '/data/CXR8/NTUH'):
+                 'wjl': '/data/CXR8/NTUH/WJL_Reports',
+                 'many': '/data/CXR8/NTUH/MANY_Reports'}
+    def __init__(self, name: str, root_path='/data/CXR8/NTUH'):
         self.name = name.upper()
         self.root_path = root_path
-        self.excel_path = os.path.join(root_path, '{}.xls'.format(name.upper()))
-        self.raw_sent_path = os.path.join(root_path, '{}_raw.txt'.format(name.upper()))
-        self.corrected_sent_path = os.path.join(root_path, '{}_corrected.txt'.format(name.upper()))
-        self.abstract_sent_path = os.path.join(root_path, '{}_abs.txt'.format(name.upper()))
+        self.excel_path = os.path.join(root_path, '{}_report.xls'.format(name.upper()))
+        self.report_path = os.path.join(root_path, '{}_report.txt'.format(name.upper()))
+        self.raw_sent_path = os.path.join(root_path, '{}_raw_sentence.txt'.format(name.upper()))
+        self.corrected_sent_path = os.path.join(root_path, '{}_corrected_sentence.txt'.format(name.upper()))
         self.json_repo = self.__class__.json_repo.get(name.lower(), '')
         self.json_files = self._get_json_list()
         self.reports = self._get_report_body()
+        self._save_list(self.reports, self.report_path)
         self.raw_sentences = self._split_into_sentence()
         self._save_list(self.raw_sentences, self.raw_sent_path)
         corrected_sentences = []
@@ -286,20 +290,7 @@ def correct_typo(input_str: str) -> str:
         return corrected_sentence
 
 
-def sentence_splitter1(report: str, tokenizer) -> list:
-    """
-    A sentence tokenizer from Punkt Sentence tokenizer
-    Return a list of sentence strings.
-    """
-    output = []
-    sentences = tokenizer.tokenize(report)
-    output += [s.strip() for s in sentences]
-    output.sort()
-
-    return output
-
-
-def sentence_splitter2(report_list: list, show=False) -> list:
+def sentence_splitter_regex(report_list: list, show=False) -> list:
     """
     A sentence tokenizer by regular expression.
     Return a list of sentences (string).
@@ -322,7 +313,7 @@ def sentence_splitter2(report_list: list, show=False) -> list:
     return sentence_list
 
 
-def sentence_splitter3(reports: list) -> list:
+def sentence_splitter_nltk(reports: list) -> list:
     """
     A sentence tokenizer from NLTK
     """
@@ -336,11 +327,9 @@ def sentence_splitter3(reports: list) -> list:
 
 
 def get_raw_sentences(json_repo: (str, list, dict)) -> list:
-    #punkt_tokenizer = sentence_tokenizer()
-    #punkt_tokenizer._params.abbrev_types.add(('dr','yfc'))
     json_list = _get_json_list(json_repo)
     report_list = _get_report_body(json_list)
-    raw_sentences = sentence_splitter2(report_list)
+    raw_sentences = sentence_splitter_regex(report_list)
     return raw_sentences
 
 
@@ -388,20 +377,39 @@ def remove_similar_sentence(sentence_list: list, th: float) -> tuple:
     return dissimilar, similar
 
 
-def match_sentence(sentence_list: list, th: float) -> dict:
+def match_sentence(sentence_list: list, th: float) -> list:
     matcher = SequenceMatcher(lambda x: x in ' ,.;?()<>0123456789+-*/=!@#$%^&', ' ', ' ')
     matchList = []
     for a in sentence_list:
-        matchDict = defaultdict(list)   # record similarity mapping of each sentence
-        for b in sentence_list:
+        matchDict = defaultdict(list)   # record similarity mapping for each sentence
+        for b in filter(lambda x: x != a, sentence_list):  # exclude a == b
             matcher.set_seqs(a.lower(), b.lower())
             similarity_ratio = matcher.ratio()
 
-            if th < similarity_ratio < 1:   # exclude a = b
+            if similarity_ratio > th:
                 matchDict['sent_a'] = a
                 matchDict['sent_b'].append({b:similarity_ratio})
 
-                print('"{}"\n"{}"\nSimilarity: {:.3f}'.format(a, b, similarity_ratio))
+                print('"{}"\n"{}"\nSequence similarity: {:.3f}'.format(a, b, similarity_ratio))
+                print()
+
+        if len(matchDict['sent_b']) > 0:
+            matchList.append(matchDict)
+    return matchList
+
+
+def match_sentence_semantic(sentence_list: list, th: float) -> list:
+    nlp = spacy.load('en')
+    matchList = []
+    for a in sentence_list:
+        matchDict = defaultdict(list)   # record similarity mapping for each sentence
+        for b in filter(lambda x: x != a, sentence_list):  # exclude a == b
+            similarity_ratio = nlp(a.lower()).similarity(nlp(b.lower()))
+            if similarity_ratio > th:
+                matchDict['sent_a'] = a
+                matchDict['sent_b'].append({b:similarity_ratio})
+
+                print('"{}"\n"{}"\nSemantic similarity: {:.3f}'.format(a, b, similarity_ratio))
                 print()
 
         if len(matchDict['sent_b']) > 0:
@@ -437,20 +445,21 @@ def find_common_sentence(sentences: list, k: int) -> dict:
 
 
 def main():
-    name = 'JYC'
-    th = 0.9
-    number = 5
-    start = 4
+    name = 'YFC'
+    th = 0.96
+    number = 3
+    start = 0
 
     for i in range(start, start + number):
         try:
             with open('/data/CXR8/NTUH/{}_CommonSent_{}.json'.format(name, i-1), 'rt', encoding='utf-8-sig') as fp:
                 sentences = json.load(fp)
         except:
-            sentences = Report(name.lower()).raw_sentences
+            sentences = Report(name.lower()).corrected_sentences
 
         sentences = list(set(sentences))
-        matchList = match_sentence(sentences, th)
+        #matchList = match_sentence(sentences, th)
+        matchList = match_sentence_semantic(sentences, th)
         count_matchList = sorted([(d['sent_a'], len(d['sent_b'])) for d in matchList],
                                  key=lambda x: x[1], reverse=True)
         # exclude the sentence of only single match
