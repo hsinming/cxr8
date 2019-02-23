@@ -6,12 +6,12 @@ import random
 import numpy as np
 import scipy.misc
 import logging
+import importlib
 
 #https://docs.python.org/3/howto/logging-cookbook.html
-def get_logger(ch_log_level=logging.ERROR, 
-               fh_log_level=logging.INFO):
+def get_logger(ch_log_level=logging.ERROR, fh_log_level=logging.INFO):
     logging.shutdown()
-    imp.reload(logging)
+    importlib.reload(logging)
     logger = logging.getLogger("CheXNet")
     logger.setLevel(logging.DEBUG)
     
