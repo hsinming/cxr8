@@ -14,10 +14,12 @@ import time
 import os
 
 
-use_gpu = torch.cuda.is_available
+use_gpu = torch.cuda.is_available()
+device = torch.device('cuda' if use_gpu else 'cpu')
 data_dir = "/data/CXR8/images"
 save_dir = "./savedModels"
 label_path = {'train':"./Train_Label.csv", 'val':"./Val_Label.csv", 'test':"Test_Label.csv"}
+
 
 class CXRDataset(Dataset):
 
@@ -41,6 +43,36 @@ class CXRDataset(Dataset):
         sample = {'image': image, 'label': label}
 
         return sample
+
+
+class Model(nn.Module):
+    def __init__(self):
+        super(Model, self).__init__()
+        self.model_ft = models.alexnet(pretrained=True)
+        self.model_ft = nn.Sequential(*list(self.model_ft.features.children())[:-1])
+        for param in self.model_ft.parameters():
+            param.requires_grad = False
+
+        self.transition = nn.Sequential(
+            nn.Conv2d(256, 256, kernel_size=3, padding=2, stride=1, bias=False),
+            nn.AvgPool2d(kernel_size=2, stride=2),
+        )
+        self.globalPool = nn.Sequential(
+            nn.MaxPool2d(32)
+        )
+        self.prediction = nn.Sequential(
+            nn.Linear(256, 14),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        x = self.model_ft(x)  # 256x64x64
+        x = self.transition(x)  # 256x32x32
+        x = self.globalPool(x)  # 256x1x1
+        x = x.view(x.size(0), -1)  # 256
+        x = self.prediction(x)  # 14
+        return x
+
 
 def loadData(batch_size):
     trans = transforms.Compose([transforms.Resize(224), transforms.ToTensor()])
@@ -174,72 +206,6 @@ def train_model(model, optimizer, num_epochs=25):
     model.load_state_dict(best_model_wts)
     return model
 
-class Model(nn.Module):
-    def __init__(self):
-        super(Model, self).__init__()
-        self.model_ft = models.alexnet(pretrained=True)
-        self.model_ft = nn.Sequential(*list(self.model_ft.features.children())[:-1])
-        for param in self.model_ft.parameters():
-            param.requires_grad = False
-
-        self.transition = nn.Sequential(
-            nn.Conv2d(256, 256, kernel_size=3, padding=2, stride=1, bias=False),
-            nn.AvgPool2d(kernel_size=2, stride=2),
-        )
-        self.globalPool = nn.Sequential(
-            nn.MaxPool2d(32)
-        )
-        self.prediction = nn.Sequential(
-            nn.Linear(256, 14),
-            nn.Sigmoid()
-        )
-    
-    def forward(self, x):
-        x = self.model_ft(x)#256x64x64
-        x = self.transition(x)#256x32x32
-        x = self.globalPool(x)#256x1x1
-        x = x.view(x.size(0), -1)#256
-        x = self.prediction(x)#14
-        return x
-'''
-class Model(nn.Module):
-    def __init__(self):
-        super(Model, self).__init__()
-        self.model_ft = models.resnet50(pretrained=True)
-        for param in self.model_ft.parameters():
-            param.requires_grad = False
-
-        self.transition = nn.Sequential(
-            nn.Conv2d(2048, 2048, kernel_size=3, padding=1, stride=1, bias=False),
-            #nn.AvgPool2d(kernel_size=2, stride=2),
-        )
-        self.globalPool = nn.Sequential(
-            nn.MaxPool2d(32)
-        )
-        self.prediction = nn.Sequential(
-            nn.Linear(2048, 14),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        x = self.model_ft.conv1(x)
-        x = self.model_ft.bn1(x)
-        x = self.model_ft.relu(x)
-        x = self.model_ft.maxpool(x)
-
-        x = self.model_ft.layer1(x)
-        x = self.model_ft.layer2(x)
-        x = self.model_ft.layer3(x)
-        x = self.model_ft.layer4(x)
-
-
-        x = self.transition(x)
-        x = self.globalPool(x)
-        x = x.view(x.size(0), -1)
-        x = self.prediction(x)#14
-        return x
-'''   
-
 def saveInfo(model):
     #save model
     if not os.path.exists(save_dir):
@@ -259,18 +225,11 @@ if __name__ == '__main__':
     except:pass
         #model = Model()
 
-    #optimizer = optim.Adam([
-    #        {'params':model.transition.parameters()},
-    #        {'params':model.globalPool.parameters()},
-    #        {'params':model.prediction.parameters()}],
-    #        lr=1e-3)
-
     optimizer = optim.Adam(model.classifier.parameters(), 3e-4)
 
+    model = model.to(device)
     if use_gpu:
-        model = model.cuda()
-        model = torch.nn.DataParallel(model).cuda()
-
+        model = torch.nn.DataParallel(model)
 
     model = train_model(model, optimizer, num_epochs = 50)
     saveInfo(model)    
