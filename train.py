@@ -21,11 +21,11 @@ label_path = {'train':"./Train_Label.csv", 'val':"./Val_Label.csv", 'test':"Test
 
 class CXRDataset(Dataset):
 
-    def __init__(self, csv_file, root_dir, transform = None):
+    def __init__(self, csv_file, root_dir, transform=None):
         self.labels_csv = pd.read_csv(csv_file, header=0)
         self.root_dir = root_dir
         self.transform = transform
-        self.classes = pd.read_csv(csv_file, header=None,nrows=1).ix[0, :].as_matrix()
+        self.classes = pd.read_csv(csv_file, header=None, nrows=1).ix[0, :].as_matrix()
         self.classes = self.classes[1:]
 
     def __len__(self):
